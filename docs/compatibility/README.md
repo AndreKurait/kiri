@@ -110,7 +110,8 @@ workflow does not establish support for every option on its endpoints.
 - Linux cgroup v2 cannot implement `OomKillDisable=true`; requests are explicitly
   rejected. GPU requests, Swarm, and plugins are outside the requested scope.
 - User namespace remapping/rootless daemon configuration and seccomp notification
-  listeners/explicit filter flags are not implemented.
+  listeners/explicit filter flags are not implemented. Custom profiles retain
+  Kiri's existing vsock/io_uring host-boundary restrictions.
 - Explicit macvlan/ipvlan parent devices must already exist; automatic VLAN
   parent creation is not implemented. L3 modes and all gateway-mode combinations
   still need broader conformance evidence.

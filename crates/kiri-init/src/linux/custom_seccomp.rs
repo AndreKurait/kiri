@@ -144,15 +144,17 @@ mod tests {
     #[test]
     fn custom_filter_is_enforced_by_the_kernel() {
         let filter = compile(r#"{"defaultAction":"SCMP_ACT_ALLOW","syscalls":[{"names":["getppid"],"action":"SCMP_ACT_ERRNO","errnoRet":13}]}"#, 0).unwrap();
-        // The child only uses prctl, seccomp, getppid, and _exit; it never
-        // enters the test framework or touches locks inherited from it.
+        // Keep enforcement inside the child so the test runner does not
+        // inherit either filter; exit without re-entering the test framework.
         let pid = unsafe { libc::fork() };
         assert!(pid >= 0);
         if pid == 0 {
             unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+            if super::super::seccomp::install(None).is_err() { unsafe { libc::_exit(4) }; }
             if filter.install().is_err() { unsafe { libc::_exit(2) }; }
             let denied = unsafe { libc::syscall(libc::SYS_getppid) } == -1 && io::Error::last_os_error().raw_os_error() == Some(13);
-            unsafe { libc::_exit(if denied { 0 } else { 3 }) };
+            let boundary = unsafe { libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM, 0) } == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::EAFNOSUPPORT);
+            unsafe { libc::_exit(if denied && boundary { 0 } else { 3 }) };
         }
         let mut status = 0;
         assert_eq!(unsafe { libc::waitpid(pid, &mut status, 0) }, pid);

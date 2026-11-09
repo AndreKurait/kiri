@@ -1218,6 +1218,7 @@ fn finish_child(p: &Prepared, io: &ChildStdio, console: bool) -> ! {
     // Without the default profile the host boundary stays: vsock is not
     // namespaced, and privileges inside the VM are no reason to reach the host.
     if let Some(filter) = &p.custom_seccomp {
+        super::seccomp::install(None).unwrap_or_else(|e| fail("host boundary", e));
         filter.install().unwrap_or_else(|e| fail("custom seccomp", e));
     } else {
         super::seccomp::install(p.seccomp.then_some(p.caps)).unwrap_or_else(|e| fail("seccomp", e));
