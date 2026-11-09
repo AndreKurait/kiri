@@ -169,8 +169,8 @@ class Engine:
             assert error.get("message"), error
         assert self.inspect(cid)["HostConfig"]["RestartPolicy"]["Name"] == "no"
 
-    def websocket_attach(self):
-        cid = self.create(["cat"], OpenStdin=True)
+    def websocket_attach(self, stdin_once=False):
+        cid = self.create(["cat"], OpenStdin=True, StdinOnce=stdin_once)
         self.request("POST", f"/containers/{cid}/start", status=204)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(10)
@@ -205,6 +205,15 @@ class Engine:
                 sock.sendall(b"\x88\x82" + mask + bytes(v ^ mask[i] for i, v in enumerate(b"\x03\xe8")))
         finally:
             sock.close()
+        if stdin_once:
+            for _ in range(100):
+                if not self.inspect(cid)["State"]["Running"]:
+                    break
+                time.sleep(.02)
+            assert not self.inspect(cid)["State"]["Running"], "StdinOnce must close stdin on disconnect"
+        else:
+            time.sleep(.1)
+            assert self.inspect(cid)["State"]["Running"], "Disconnect must preserve stdin when StdinOnce is false"
 
     def addressing(self, ipv4, ipv6):
         config = []
@@ -302,6 +311,7 @@ def main():
             ("resource-limit-reset", engine.resource_reset),
             ("invalid-updates-do-not-mutate", engine.invalid_updates),
             ("websocket-attach-roundtrip", engine.websocket_attach),
+            ("websocket-stdin-once", lambda: engine.websocket_attach(True)),
             ("ipv4-static-address", lambda: engine.addressing(True, False)),
             ("dual-stack-static-address", lambda: engine.addressing(True, True)),
             ("ipv6-only-static-address", lambda: engine.addressing(False, True)),

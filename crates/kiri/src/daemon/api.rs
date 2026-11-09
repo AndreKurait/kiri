@@ -1548,6 +1548,7 @@ pub(super) fn create(req: &Request, engine: &Engine) -> Result<Value, Error> {
         labels: body["Labels"].clone(),
         tty: body["Tty"].as_bool().unwrap_or(false),
         open_stdin: body["OpenStdin"].as_bool().unwrap_or(false),
+        stdin_once: body["StdinOnce"].as_bool().unwrap_or(false),
         console_size: console_size(&host["ConsoleSize"]),
         aliases,
         extra_hosts,
@@ -1891,6 +1892,7 @@ fn inspect(c: &Container, nets: &[super::network::Network]) -> Value {
             "User": c.spec.user,
             "Tty": c.spec.tty,
             "OpenStdin": c.spec.open_stdin,
+            "StdinOnce": c.spec.stdin_once,
             "AttachStdout": true,
             "AttachStderr": true,
             "Labels": if c.spec.labels.is_object() { c.spec.labels.clone() } else { json!({}) },
@@ -2127,7 +2129,8 @@ fn attach(req: &Request, engine: &Arc<Engine>, key: &str, w: &mut UnixStream, r:
     };
     http::upgrade(w)?;
     if want_in {
-        forward_stdin(engine.clone(), id, r)?;
+        let close = engine.with(&id, |c| c.spec.stdin_once && !c.spec.tty).unwrap_or(false);
+        forward_stdin(engine.clone(), id, r, close)?;
     }
     pump(rx, tty, want_out, want_err, w)?;
     let _ = w.shutdown(std::net::Shutdown::Write);
@@ -2136,7 +2139,7 @@ fn attach(req: &Request, engine: &Arc<Engine>, key: &str, w: &mut UnixStream, r:
 
 /// Copies the client's side of a hijacked connection into the process's
 /// stdin, on its own thread, ending with CloseStdin at EOF.
-fn forward_stdin(engine: Arc<Engine>, id: String, r: &mut BufReader<UnixStream>) -> io::Result<()> {
+fn forward_stdin(engine: Arc<Engine>, id: String, r: &mut BufReader<UnixStream>, close: bool) -> io::Result<()> {
     // Anything the client sent right behind the request is already buffered.
     let early = r.buffer().to_vec();
     let mut stream = r.get_ref().try_clone()?;
@@ -2156,7 +2159,9 @@ fn forward_stdin(engine: Arc<Engine>, id: String, r: &mut BufReader<UnixStream>)
                 }
             }
         }
-        let _ = engine.close_stdin(&id);
+        if close {
+            let _ = engine.close_stdin(&id);
+        }
     })?;
     Ok(())
 }
@@ -2254,7 +2259,7 @@ fn exec_start(req: &Request, engine: &Arc<Engine>, id: &str, w: &mut UnixStream,
     }
     http::upgrade(w)?;
     if stdin {
-        forward_stdin(engine.clone(), id.to_owned(), r)?;
+        forward_stdin(engine.clone(), id.to_owned(), r, true)?;
     }
     pump(rx, tty, true, true, w)?;
     let _ = w.shutdown(std::net::Shutdown::Write);

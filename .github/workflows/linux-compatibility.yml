@@ -1,7 +1,7 @@
 name: Linux container and network compatibility
 on:
   push:
-    branches: [main, linux-api-compatibility]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:

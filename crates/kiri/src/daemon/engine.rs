@@ -147,6 +147,8 @@ pub struct Spec {
     #[serde(default)]
     pub open_stdin: bool,
     #[serde(default)]
+    pub stdin_once: bool,
+    #[serde(default)]
     pub restart: RestartPolicy,
     /// Initial terminal size (rows, cols), from `HostConfig.ConsoleSize`.
     #[serde(default)]

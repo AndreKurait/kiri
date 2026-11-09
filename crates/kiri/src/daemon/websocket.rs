@@ -56,7 +56,7 @@ pub(super) fn attach(req: &Request, engine: &Arc<Engine>, key: &str, w: &mut Uni
     let result = bridge(w.try_clone()?, early, output, req.flag("stdout"), req.flag("stderr"), |data| {
         if stdin { engine.input(&id, data).map_err(io::Error::other) } else { Ok(()) }
     });
-    if stdin {
+    if stdin && engine.with(&id, |c| c.spec.stdin_once && !c.spec.tty).unwrap_or(false) {
         let _ = engine.close_stdin(&id);
     }
     result?;
