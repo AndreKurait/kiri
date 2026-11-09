@@ -35,6 +35,9 @@ security profiles from a matching API version.
 - Add WebSocket attach with bidirectional streaming, log replay, ping/pong,
   close handling, and output backpressure.
 - Return Docker's HTTP 200 for detached exec start.
+- Preserve the documented status code for empty responses, including network
+  connect/disconnect, and return 304 for already-started/stopped containers.
+- Wait for process exit before returning from a forced stop.
 - Remove CPU quota and PID limits through container updates, preserve omitted
   settings, and validate numeric limits before mutation.
 - Validate restart policies consistently on container create and update.

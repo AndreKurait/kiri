@@ -69,7 +69,7 @@ pub(super) enum Next {
 
 pub(super) fn reply(w: &mut UnixStream, result: Result<Value, Error>, ok: u16) -> io::Result<Next> {
     match result {
-        Ok(Value::Null) => http::no_content(w)?,
+        Ok(Value::Null) => http::respond(w, ok, "application/json", b"")?,
         Ok(v) => http::json(w, ok, &v.to_string())?,
         Err(e) => error(w, e)?,
     }
@@ -225,10 +225,26 @@ fn route(req: &Request, engine: &Arc<Engine>, w: &mut UnixStream, r: &mut BufRea
         match (m, action) {
             ("GET", "json") => return reply(w, container_inspect(engine, id), 200),
             ("POST", "start") => {
+                match engine.with(id, |c| c.status == Status::Running) {
+                    Ok(true) => {
+                        http::respond(w, 304, "", b"")?;
+                        return Ok(Next::KeepAlive);
+                    }
+                    Err(e) => return reply(w, Err(e), 204),
+                    _ => {}
+                }
                 super::builder::before_start(engine, id);
                 return reply(w, engine.start(id).map(|()| Value::Null), 204);
             }
             ("POST", "stop") => {
+                match engine.with(id, |c| c.status == Status::Running) {
+                    Ok(false) => {
+                        http::respond(w, 304, "", b"")?;
+                        return Ok(Next::KeepAlive);
+                    }
+                    Err(e) => return reply(w, Err(e), 204),
+                    _ => {}
+                }
                 let t = stop_timeout(req, engine, id);
                 return reply(w, engine.stop(id, t).map(|()| Value::Null), 204);
             }
@@ -1322,7 +1338,8 @@ pub(super) fn validate_limits(h: &Value) -> Result<(), Error> {
             "CpuQuota" => n == -1 || n == 0 || n >= 1000,
             "CpuPeriod" => n == 0 || (1000..=1_000_000).contains(&n),
             "CpuShares" => n == 0 || (2..=262_144).contains(&n),
-            "PidsLimit" => (-1..=u32::MAX as i64).contains(&n),
+            // Docker treats non-positive values as unlimited.
+            "PidsLimit" => n <= u32::MAX as i64,
             _ => unreachable!(),
         };
         if !valid {
@@ -1337,6 +1354,12 @@ pub(super) fn validate_limits(h: &Value) -> Result<(), Error> {
 }
 
 pub(super) fn restart_policy(value: &Value, auto_remove: bool) -> Result<RestartPolicy, Error> {
+    if !value.is_null() && !value.is_object() {
+        return Err(Error::BadRequest("restart policy must be an object".into()));
+    }
+    if !value["Name"].is_null() && !value["Name"].is_string() {
+        return Err(Error::BadRequest("restart policy name must be a string".into()));
+    }
     let name = match value["Name"].as_str() {
         None | Some("") => "no",
         Some(name) => name,
@@ -2204,7 +2227,13 @@ fn exec_create(req: &Request, engine: &Engine, key: &str) -> Result<Value, Error
 }
 
 fn exec_start(req: &Request, engine: &Arc<Engine>, id: &str, w: &mut UnixStream, r: &mut BufReader<UnixStream>) -> io::Result<Next> {
-    let body: Value = serde_json::from_slice(&req.body).unwrap_or(Value::Null);
+    let body: Value = match serde_json::from_slice(&req.body) {
+        Ok(body) => body,
+        Err(e) => return reply(w, Err(Error::BadRequest(format!("invalid JSON: {e}"))), 200),
+    };
+    if !body.is_object() {
+        return reply(w, Err(Error::BadRequest("exec start configuration must be an object".into())), 200);
+    }
     let detach = body["Detach"].as_bool().unwrap_or(false);
     if let Some(size) = console_size(&body["ConsoleSize"]) {
         engine.exec_console(id, size);
@@ -2554,6 +2583,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn empty_responses_keep_the_operations_status_code() {
+        use std::io::{BufRead, Write};
+        for status in [200, 204, 304] {
+            let (client, mut server) = UnixStream::pair().unwrap();
+            reply(&mut server, Ok(Value::Null), status).unwrap();
+            server.flush().unwrap();
+            let mut line = String::new();
+            BufReader::new(client).read_line(&mut line).unwrap();
+            assert!(line.starts_with(&format!("HTTP/1.1 {status} ")), "{line}");
+        }
+    }
+
+    #[test]
     fn resource_updates_remove_limits_and_preserve_omitted_values() {
         let base = super::super::engine::Limits {
             pids_max: 32, cpu_quota: 20000, cpu_period: 100000, memory_max: 67108864,
@@ -2573,7 +2615,7 @@ mod tests {
     #[test]
     fn resource_validation_prevents_truncation_and_conflicting_options() {
         for value in [
-            json!({"PidsLimit": 4294967296u64}), json!({"PidsLimit": -2}),
+            json!({"PidsLimit": 4294967296u64}),
             json!({"CpuPeriod": 1}), json!({"Memory": -1}),
             json!({"CpuShares": 262145}), json!({"NanoCpus": 1_000_000_000, "CpuQuota": 10000}),
         ] {

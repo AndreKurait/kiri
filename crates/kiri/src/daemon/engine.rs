@@ -2513,6 +2513,13 @@ impl Engine {
             if left.is_zero() {
                 drop(st);
                 self.vm()?.kill(&id, libc::SIGKILL as u32)?;
+                // Docker's stop response means the process has exited, even
+                // with t=0. Wait for its exit (or auto-removal) to be recorded.
+                let mut exited = self.lock();
+                while exited.containers.get(&id).is_some_and(|c| c.status == Status::Running) {
+                    exited = self.changed.wait(exited).unwrap_or_else(|e| e.into_inner());
+                }
+                drop(exited);
                 self.emit_container("stop", &id, &[]);
                 return Ok(());
             }

@@ -222,8 +222,8 @@ else report FAIL ula-distinct-subnets "$DOC_V6#dynamic-ipv6-subnet-allocation" "
 # A given subnet; the gateway defaults to its first address.
 net --ipv6 --subnet "${S1}/64" "$N-sub" >/dev/null
 has user-subnet "$DOC_CREATE" "${S1}/64" d network inspect "$N-sub" -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}'
-# Docker 28 realizes its automatically selected IPv6 gateway on first use.
-# Check this after starting the first endpoint below.
+# Check the runtime endpoint's gateway below. Docker 28's IPAM.Config retains
+# the user-supplied configuration and omits an automatically chosen gateway.
 lacks gateway-no-cidr-suffix "$M_BR TestNetworkInspectGateway" "/" d network inspect "$N-sub" -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}'
 has explicit-gateway "$DOC_CREATE" "${S2}fe" sh -c "$(printf '%q ' "${D[@]}") network create --label $LABEL --ipv6 --subnet ${S2}/64 --gateway ${S2}fe $N-gw >/dev/null && $(printf '%q ' "${D[@]}") network inspect $N-gw -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}'"
 refused subnet-overlap-refused "$DOC_CREATE" net --ipv6 --subnet "${S1}/80" "$N-dup"
@@ -236,7 +236,7 @@ WEB6=$(v6of "$N-web" "$N-sub")
 case "$WEB6" in ${S1}*) report PASS container-gets-v6 "$DOC_V6#create-an-ipv6-network" ;;
   *) report FAIL container-gets-v6 "$DOC_V6#create-an-ipv6-network" "GlobalIPv6Address=$WEB6" ;; esac
 has prefix-len-64 "$DOC_V6" "64" d inspect -f "{{(index .NetworkSettings.Networks \"$N-sub\").GlobalIPv6PrefixLen}}" "$N-web"
-has default-gateway-first "$DOC_BRIDGE" "${S1}1" d network inspect "$N-sub" -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}'
+has default-gateway-first "$DOC_BRIDGE" "${S1}1" d inspect "$N-web" -f "{{(index .NetworkSettings.Networks \"$N-sub\").IPv6Gateway}}"
 has ipv6-gateway-field "$DOC_V6" "${S1}1" d inspect -f "{{(index .NetworkSettings.Networks \"$N-sub\").IPv6Gateway}}" "$N-web"
 has ipv4-too "$DOC_V6 (dual stack)" "." d inspect -f "{{(index .NetworkSettings.Networks \"$N-sub\").IPAddress}}" "$N-web"
 has network-lists-member "$DOC_V6" "$WEB6/64" d network inspect "$N-sub" -f '{{range .Containers}}{{.IPv6Address}} {{end}}'

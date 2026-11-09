@@ -114,6 +114,7 @@ class Engine:
     def pause_restart_exec(self):
         cid = self.create()
         self.request("POST", f"/containers/{cid}/start", status=204)
+        self.request("POST", f"/containers/{cid}/start", status=304)
         self.request("POST", f"/containers/{cid}/pause", status=204)
         assert self.inspect(cid)["State"]["Paused"]
         self.request("POST", f"/containers/{cid}/unpause", status=204)
@@ -131,6 +132,7 @@ class Engine:
         assert self.inspect(cid)["State"]["Running"]
         self.request("POST", f"/containers/{cid}/stop?t=0", status=204)
         assert not self.inspect(cid)["State"]["Running"]
+        self.request("POST", f"/containers/{cid}/stop?t=0", status=304)
 
     def resource_reset(self):
         cid = self.create(host={"PidsLimit": 32, "CpuQuota": 20000, "CpuPeriod": 100000})
@@ -160,7 +162,7 @@ class Engine:
             {"RestartPolicy": {"Name": "invalid"}},
             {"RestartPolicy": {"Name": "always", "MaximumRetryCount": 2}},
             {"RestartPolicy": {"Name": "on-failure", "MaximumRetryCount": -1}},
-            {"CpuPeriod": 1}, {"PidsLimit": -2}, {"Memory": -1},
+            {"CpuPeriod": 1}, {"Memory": -1},
             {"NanoCpus": 1000000000, "CpuQuota": 10000},
         ]:
             error = self.request("POST", f"/containers/{cid}/update", value, 400)
@@ -181,8 +183,11 @@ class Engine:
             with sock.makefile("rb") as response:
                 status = response.readline()
                 assert b" 101 " in status, status
-                while response.readline() != b"\r\n":
-                    pass
+                while True:
+                    line = response.readline()
+                    assert line, "WebSocket upgrade headers ended prematurely"
+                    if line == b"\r\n":
+                        break
                 data, mask = b"websocket-roundtrip\n", os.urandom(4)
                 sock.sendall(bytes([0x82, 0x80 | len(data)]) + mask +
                              bytes(value ^ mask[i % 4] for i, value in enumerate(data)))
