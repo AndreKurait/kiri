@@ -724,6 +724,7 @@ version = "0.0.0"
 dependencies = [
  "block2",
  "dispatch2",
+ "flate2",
  "gtk",
  "javascriptcore-rs",
  "kiri-image",

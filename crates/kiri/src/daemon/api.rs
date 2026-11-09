@@ -2400,6 +2400,35 @@ fn archive_get(req: &Request, engine: &Engine, id: &str, w: &mut UnixStream) -> 
 
 /// `docker cp` into a container: the body is a tar archive, streamed to the
 /// guest as it arrives.
+#[derive(Debug, PartialEq)]
+enum Upload {
+    Tar,
+    Gzip,
+    Unsupported(&'static str),
+}
+
+/// What an archive upload is, from its first bytes. Docker accepts tar,
+/// gzip, bzip2, xz and zstd here; anything that isn't compressed is tar.
+fn upload_compression(head: &[u8]) -> Upload {
+    match head {
+        [0x1f, 0x8b, ..] => Upload::Gzip,
+        [b'B', b'Z', b'h', ..] => Upload::Unsupported("bzip2"),
+        [0xfd, b'7', b'z', b'X', b'Z', 0, ..] => Upload::Unsupported("xz"),
+        [0x28, 0xb5, 0x2f, 0xfd, ..] => Upload::Unsupported("zstd"),
+        _ => Upload::Tar,
+    }
+}
+
+/// The upload as tar: `head` (its first bytes, already read) then `rest`.
+fn upload_reader<'a>(head: Vec<u8>, rest: impl io::Read + 'a) -> Result<Box<dyn io::Read + 'a>, Error> {
+    use std::io::Read;
+    match upload_compression(&head) {
+        Upload::Tar => Ok(Box::new(io::Cursor::new(head).chain(rest))),
+        Upload::Gzip => Ok(Box::new(flate2::read::MultiGzDecoder::new(io::Cursor::new(head).chain(rest)))),
+        Upload::Unsupported(kind) => Err(Error::BadRequest(format!("a {kind}-compressed archive isn't supported yet: send it as tar or gzip"))),
+    }
+}
+
 fn archive_put(req: &Request, engine: &Engine, id: &str, w: &mut UnixStream, r: &mut BufReader<UnixStream>) -> io::Result<Next> {
     use kiri_proto::copy_flags;
     let path = req.query("path").unwrap_or("/");
@@ -2410,6 +2439,18 @@ fn archive_put(req: &Request, engine: &Engine, id: &str, w: &mut UnixStream, r: 
     if req.flag("noOverwriteDirNonDir") {
         flags |= copy_flags::NO_OVERWRITE_DIR_NON_DIR;
     }
+    // Docker takes the archive plain or compressed; the guest unpacks tar.
+    use std::io::Read;
+    let mut body = http::Body::new(req, r);
+    let mut head = Vec::with_capacity(6);
+    (&mut body).take(6).read_to_end(&mut head)?;
+    let mut archive = match upload_reader(head, body) {
+        Ok(a) => a,
+        Err(e) => {
+            error(w, e)?;
+            return Ok(Next::Close);
+        }
+    };
     let stream = match engine.copy(id, kiri_proto::copy_op::IN, path, flags) {
         Ok(s) => s,
         Err(e) => {
@@ -2418,7 +2459,7 @@ fn archive_put(req: &Request, engine: &Engine, id: &str, w: &mut UnixStream, r: 
         }
     };
     let mut to_guest = std::fs::File::from(stream.fd.try_clone()?);
-    if let Err(e) = send_chunks(&mut http::Body::new(req, r), &mut to_guest) {
+    if let Err(e) = send_chunks(&mut archive, &mut to_guest) {
         // The client's body broke off: dropping the stream ends the guest's copy.
         error(w, Error::Io(e))?;
         return Ok(Next::Close);
@@ -2513,6 +2554,39 @@ mod tests {
     #[test]
     fn vm_platforms_report_the_guest_kernel() {
         assert_eq!(version()["KernelVersion"], GUEST_KERNEL);
+    }
+
+    #[test]
+    fn archive_uploads_are_sniffed() {
+        assert_eq!(upload_compression(&[0x1f, 0x8b, 8, 0, 0, 0]), Upload::Gzip);
+        assert_eq!(upload_compression(b"BZh91A"), Upload::Unsupported("bzip2"));
+        assert_eq!(upload_compression(&[0xfd, b'7', b'z', b'X', b'Z', 0]), Upload::Unsupported("xz"));
+        assert_eq!(upload_compression(&[0x28, 0xb5, 0x2f, 0xfd, 0, 0]), Upload::Unsupported("zstd"));
+        assert_eq!(upload_compression(b"etc/ho"), Upload::Tar);
+        assert_eq!(upload_compression(b""), Upload::Tar);
+    }
+
+    /// DDEV's CopyIntoVolume sends a gzipped tar: the guest gets the tar.
+    #[test]
+    fn gzip_uploads_reach_the_guest_as_tar() {
+        use std::io::{Read, Write};
+        let mut t = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_ustar();
+        h.set_size(5);
+        h.set_mode(0o644);
+        h.set_entry_type(tar::EntryType::Regular);
+        t.append_data(&mut h, "traefik/static_config.yaml", &b"hello"[..]).unwrap();
+        let plain = t.into_inner().unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(&plain).unwrap();
+        let gz = gz.finish().unwrap();
+        for upload in [&gz, &plain] {
+            let (head, rest) = upload.split_at(6);
+            let mut got = Vec::new();
+            upload_reader(head.to_vec(), rest).ok().unwrap().read_to_end(&mut got).unwrap();
+            assert_eq!(got, plain);
+        }
+        assert!(matches!(upload_reader(b"BZh91A".to_vec(), &b""[..]), Err(Error::BadRequest(m)) if m.contains("bzip2")));
     }
 
     #[test]
