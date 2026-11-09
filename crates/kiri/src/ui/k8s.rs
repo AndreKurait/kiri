@@ -82,8 +82,8 @@ fn copy(text: &str) {
         c.wait()
     });
     match done {
-        Ok(s) if s.success() => emit(notice("ok", &format!("Copied {text}"))),
-        _ => emit(notice("error", "Couldn't copy to the clipboard")),
+        Ok(s) if s.success() => emit(notice("ok", &super::trf("Copied {text}", &[("text", &text)]))),
+        _ => emit(notice("error", &super::tr("Couldn't copy to the clipboard"))),
     }
 }
 
@@ -298,7 +298,7 @@ fn op(name: &'static str, args: Vec<String>) {
     {
         let mut running = OP.lock().unwrap_or_else(|e| e.into_inner());
         if running.is_some() {
-            return emit(notice("error", "Kubernetes is busy with another change; try again in a moment"));
+            return emit(notice("error", &super::tr("Kubernetes is busy with another change; try again in a moment")));
         }
         *running = Some(name);
     }
@@ -372,7 +372,7 @@ fn logs(ns: String, pod: String, container: String, previous: bool) {
         // The shell says its pid first, then becomes kubectl.
         let (mut r, _) = match exec_start(&["sh", "-c", "echo $$; exec kubectl logs \"$@\"", "logs", which, "--tail=2000", "-n", &ns, &pod, "-c", &container]) {
             Ok(s) => s,
-            Err(e) => return emit(notice("error", &format!("Logs: {e}"))),
+            Err(e) => return emit(notice("error", &super::trf("Logs: {error}", &[("error", &e)]))),
         };
         let mut first = String::new();
         let _ = r.read_line(&mut first);

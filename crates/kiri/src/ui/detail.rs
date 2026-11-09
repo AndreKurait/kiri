@@ -47,7 +47,7 @@ pub fn logs(id: String) {
         let tty = client::get(&format!("/containers/{id}/json")).is_ok_and(|v| v["Config"]["Tty"] == true);
         let mut stream = match client::Stream::open(&format!("/containers/{id}/logs?follow=1&stdout=1&stderr=1&tail={}", super::lastlogs::LIVE_TAIL)) {
             Ok(s) => s,
-            Err(e) => return emit(notice("error", &format!("Logs: {e}"))),
+            Err(e) => return emit(notice("error", &super::trf("Logs: {error}", &[("error", &e)]))),
         };
         if let Ok(closer) = stream.closer() {
             *LOGS.lock().unwrap_or_else(|e| e.into_inner()) = Some(closer);

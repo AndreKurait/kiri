@@ -37,7 +37,7 @@ mod recheck;
 
 use serde_json::json;
 
-use crate::engine::{emit, notice};
+use crate::engine::{emit, notice, trf};
 
 #[cfg(not(target_arch = "aarch64"))]
 const FEED: &str = "https://download.runkiri.com/latest-windows-x86_64.json";
@@ -466,7 +466,7 @@ fn feed_check(manual: bool) {
         // updated from the feed: it would "update" back to its release.
         if CURRENT.contains("-dev") {
             if manual {
-                emit(notice("ok", &format!("Kiri {CURRENT} is a test build: it doesn't update itself")));
+                emit(notice("ok", &trf("Kiri {version} is a test build: it doesn't update itself", &[("version", &CURRENT)])));
             }
             update_state("test", None, None);
             return;
@@ -487,13 +487,13 @@ fn feed_check(manual: bool) {
             Ok(_) => {
                 update_state("uptodate", None, None);
                 if manual {
-                    emit(notice("ok", &format!("Kiri {CURRENT} is the newest version")));
+                    emit(notice("ok", &trf("Kiri {version} is the newest version", &[("version", &CURRENT)])));
                 }
             }
             Err(e) => {
                 update_state("error", None, Some(e.to_string()));
                 if manual {
-                    emit(notice("error", &format!("Couldn't check for updates: {e}")));
+                    emit(notice("error", &trf("Couldn't check for updates: {error}", &[("error", &e)])));
                 }
             }
         }
@@ -590,7 +590,7 @@ pub fn restart_engine_now() {
                 // The page's engine toast, as the Mac's.
                 emit(json!({"type": "enginerestarted", "version": CURRENT, "ms": began.elapsed().as_millis() as u64}).to_string());
             }
-            Err(e) => emit(notice("error", &format!("Could not restart the engine: {e}"))),
+            Err(e) => emit(notice("error", &trf("Could not restart the engine: {error}", &[("error", &e)]))),
         }
         crate::engine::send(crate::engine::Cmd::Refresh);
     });

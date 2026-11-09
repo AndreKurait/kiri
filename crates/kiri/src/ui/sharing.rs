@@ -258,7 +258,7 @@ pub fn close_all() {
         let machine = share::machine_id(&device);
         for t in live.items.iter().filter(|t| (!t.machine.is_empty() && t.machine == machine) || (!t.device.is_empty() && t.device == device)) {
             if let Err(e) = share::close_tunnel(&t.name) {
-                emit(super::notice("error", &format!("Couldn't stop {}: {e}", t.name)));
+                emit(super::notice("error", &super::trf("Couldn't stop {name}: {error}", &[("name", &t.name), ("error", &e)])));
             }
         }
         tunnels();
@@ -364,7 +364,7 @@ pub fn browse_tunnel(name: &str) {
 pub fn stop_tunnel(name: String) {
     std::thread::spawn(move || {
         if let Err(e) = share::close_tunnel(&name) {
-            emit(super::notice("error", &format!("Couldn't stop {name}: {e}")));
+            emit(super::notice("error", &super::trf("Couldn't stop {name}: {error}", &[("name", &name), ("error", &e)])));
         }
         tunnels();
     });

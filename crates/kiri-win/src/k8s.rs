@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use crate::client::{self, Closer};
-use crate::engine::{brand, brands, emit, notice};
+use crate::engine::{brand, brands, emit, notice, tr, trf};
 
 // The lists as the page shows them, and the names it may send: the Mac's.
 #[path = "../../kiri/src/ui/k8s_items.rs"]
@@ -97,8 +97,8 @@ pub fn handle(action: &str, value: &Value) {
 /// Settings' Copy buttons (the API server's address, a kubectl command).
 fn copy(text: &str) {
     match crate::engine::clipboard(text) {
-        Ok(()) => emit(notice("ok", &format!("Copied {text}"))),
-        Err(_) => emit(notice("error", "Couldn't copy to the clipboard")),
+        Ok(()) => emit(notice("ok", &trf("Copied {text}", &[("text", &text)]))),
+        Err(_) => emit(notice("error", &tr("Couldn't copy to the clipboard"))),
     }
 }
 
@@ -381,7 +381,7 @@ fn op(name: &'static str, run: impl FnOnce(&dyn Fn(&str)) -> io::Result<()> + Se
     {
         let mut running = OP.lock().unwrap_or_else(|e| e.into_inner());
         if running.is_some() {
-            return emit(notice("error", "Kubernetes is busy with another change; try again in a moment"));
+            return emit(notice("error", &tr("Kubernetes is busy with another change; try again in a moment")));
         }
         *running = Some(name);
     }
@@ -663,7 +663,7 @@ fn logs(ns: String, pod: String, container: String, previous: bool) {
         // The shell says its pid first, then becomes kubectl.
         let mut r = match client::exec_start(NAME, &["sh", "-c", "echo $$; exec kubectl logs \"$@\"", "logs", which, "--tail=2000", "-n", &ns, &pod, "-c", &container], true) {
             Ok(s) => s,
-            Err(e) => return emit(notice("error", &format!("Logs: {e}"))),
+            Err(e) => return emit(notice("error", &trf("Logs: {error}", &[("error", &e)]))),
         };
         let mut first = String::new();
         let _ = r.read_line(&mut first);

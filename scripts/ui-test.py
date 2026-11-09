@@ -7,11 +7,26 @@ with PASS or FAIL. Exits non-zero if any test fails or a page errors.
 
     python3 scripts/ui-test.py [tests/ui/switch.js ...]
 """
-import html, os, re, subprocess, sys, tempfile
+import html, json, os, re, subprocess, sys, tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHROME = os.environ.get("CHROME", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 UI = os.path.join(ROOT, "crates/kiri/src/ui")
+
+
+def strings():
+    """lang/*.json by tag, as lang.rs's strings_js splices them in."""
+    d = os.path.join(UI, "lang")
+    return {f[:-5]: json.load(open(os.path.join(d, f))) for f in sorted(os.listdir(d)) if f.endswith(".json")}
+
+
+def lang_of(test):
+    """A test runs in English, as a system set to US English would, unless
+    one of its first lines says `// lang: zh-Hans`."""
+    for line in open(test).readlines()[:3]:
+        if line.startswith("// lang:"):
+            return line.split(":", 1)[1].strip()
+    return "system"
 
 
 def page(test, os_name=None):
@@ -19,7 +34,9 @@ def page(test, os_name=None):
     xterm = lambda f: open(os.path.join(UI, "xterm", f)).read()
     index = (open(os.path.join(UI, "index.html")).read().replace("/*ICONS*/", open(os.path.join(UI, "icons.js")).read(), 1)
              .replace("/*XTERM_CSS*/", xterm("xterm.css"), 1)
-             .replace("/*XTERM_JS*/", "".join(xterm(f) + "\n" for f in ["xterm.js", "addon-fit.js", "addon-search.js", "addon-web-links.js"]), 1))
+             .replace("/*XTERM_JS*/", "".join(xterm(f) + "\n" for f in ["xterm.js", "addon-fit.js", "addon-search.js", "addon-web-links.js"]), 1)
+             .replace("/*LANG*/", f"window.KIRI_LANG = {json.dumps({'os': ['en-US'], 'pick': lang_of(test)})};", 1)
+             .replace("/*STRINGS*/{}", json.dumps(strings(), ensure_ascii=False), 1))
     if os_name and os_name != "macos":
         index = index.replace("<head>", f'<head><script>window.KIRI_OS = "{os_name}";</script>', 1)
     fixture = open(os.path.join(ROOT, "tests/ui/fixture.js")).read()

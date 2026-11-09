@@ -17,6 +17,10 @@ mod app;
 #[cfg(windows)]
 #[path = "../../kiri/src/ui/assemble.rs"]
 mod assemble;
+// Its language, and the tray menu's words.
+#[cfg(windows)]
+#[path = "../../kiri/src/ui/lang.rs"]
+mod lang;
 #[cfg(windows)]
 mod client;
 #[cfg(windows)]

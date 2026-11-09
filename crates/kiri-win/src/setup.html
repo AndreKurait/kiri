@@ -200,6 +200,25 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
 </div>
 
 <script>
+/* The page's words: English is the key, lang/<tag>.json (spliced in by
+   assemble.rs, as for the main window) gives the system's language, or the
+   one Settings picked on a setup run again. scripts/i18n-check.py checks them. */
+/*LANG*/
+var STRINGS = /*STRINGS*/{};
+var DICT = (function () {
+  var L = window.KIRI_LANG || {}, tags = L.pick && L.pick !== 'system' ? [L.pick] : (L.os && L.os.length ? L.os : navigator.languages || []);
+  for (var i = 0; i < tags.length; i++) {
+    var t = String(tags[i]).toLowerCase();
+    if (t.indexOf('zh') === 0) { document.documentElement.lang = 'zh-Hans'; return STRINGS['zh-Hans'] || null; }
+    if (t === 'en' || t.indexOf('en-') === 0) return null;
+  }
+  return null;
+})();
+function fillWords(s, vars) { return vars ? s.replace(/\{(\w+)\}/g, function (m, k) { return k in vars ? String(vars[k]) : m; }) : s; }
+function tr(s, vars) { return fillWords((DICT && DICT[s]) || s, vars); }
+function trn(n, one, other, vars) { var s = n === 1 ? one : other, v = { n: n }; for (var k in vars || {}) v[k] = vars[k]; return fillWords((DICT && DICT[s]) || s, v); }
+</script>
+<script>
 (function () {
   'use strict';
 
@@ -222,6 +241,8 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
   var RAIL = { welcome: 0, wsl: 0, restart: 0, choose: 1, linux: 1, engine: 2, tools: 3, ready: 4 };
   var CHECK = '<svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" focusable="false"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   var CHECK_RAIL = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  document.title = tr("Kiri Setup");
+  document.querySelector('.rail').setAttribute('aria-label', tr("Setup steps"));
   var MONO = 'Cascadia Mono, Consolas, monospace';
   var DISP = 'Segoe UI Variable Display, Segoe UI, sans-serif';
 
@@ -296,9 +317,9 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
   var PROG = '<div class="prog" data-slot="progress" hidden><div class="prog-h"><span class="pct"></span><span class="plabel"></span><span class="eta"></span></div>' +
     '<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="fill"></div></div><div class="pmeta"><span class="bytes"></span><span class="rate"></span></div></div>';
   var TASKS = '<ol class="tasks" data-slot="tasks" hidden></ol>';
-  var LOG = function (hl) { return '<pre class="log' + (hl ? ' hl' : '') + '" data-slot="log" aria-label="Setup log" tabindex="0" hidden></pre>'; };
+  var LOG = function (hl) { return '<pre class="log' + (hl ? ' hl' : '') + '" data-slot="log" aria-label="' + tr("Setup log") + '" tabindex="0" hidden></pre>'; };
   var ERR = '<div data-slot="error" role="alert"></div>';
-  var CANCEL = '<button type="button" class="btn" data-cmd="setup-cancel">Cancel</button>';
+  var CANCEL = '<button type="button" class="btn" data-cmd="setup-cancel">' + tr("Cancel") + '</button>';
   var hero = function (art, eyebrow, title, sub) {
     return '<div class="hero sm">' + art + '<div class="hero-t"><span class="eyebrow">' + eyebrow + '</span><h1 tabindex="-1">' + title + '</h1><p class="lede">' + sub + '</p></div></div>';
   };
@@ -308,16 +329,16 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
     var sz = s.sizes || {};
     switch (s.step) {
       case 'wsl': return { cls: '', html:
-        '<div class="head"><span class="eyebrow">Step 1 of 5</span><h1 tabindex="-1">Installing Windows Subsystem for Linux</h1></div>' +
-        '<section class="card" aria-label="Progress">' + PROG + TASKS + '</section>' +
-        '<p class="note">Windows will need one restart when this finishes. Kiri will ask before restarting, so you can save your work first.</p>' +
+        '<div class="head"><span class="eyebrow">' + tr("Step 1 of 5") + '</span><h1 tabindex="-1">' + tr("Installing Windows Subsystem for Linux") + '</h1></div>' +
+        '<section class="card" aria-label="' + tr("Progress") + '">' + PROG + TASKS + '</section>' +
+        '<p class="note">' + tr("Windows will need one restart when this finishes. Kiri will ask before restarting, so you can save your work first.") + '</p>' +
         ERR + '<div class="foot">' + CANCEL + '</div>' };
 
       case 'restart': return { cls: 'center', html:
-        ART.restart + '<h1 class="l" tabindex="-1">One restart to finish WSL</h1>' +
-        '<p class="lede lg">Windows turns on Virtual Machine Platform while it starts up. Kiri opens again by itself afterwards and carries on from step 2. Save your work first.</p>' +
-        ERR + '<div style="display:flex;gap:12px;margin-top:8px"><button type="button" class="btn lg" data-cmd="setup-later">Restart later</button><button type="button" class="btn primary lg" style="padding:0 24px" data-cmd="setup-restart">Restart now</button></div>' +
-        '<p class="small">Later: Kiri waits in the tray and picks up after your next restart.</p>' };
+        ART.restart + '<h1 class="l" tabindex="-1">' + tr("One restart to finish WSL") + '</h1>' +
+        '<p class="lede lg">' + tr("Windows turns on Virtual Machine Platform while it starts up. Kiri opens again by itself afterwards and carries on from step 2. Save your work first.") + '</p>' +
+        ERR + '<div style="display:flex;gap:12px;margin-top:8px"><button type="button" class="btn lg" data-cmd="setup-later">' + tr("Restart later") + '</button><button type="button" class="btn primary lg" style="padding:0 24px" data-cmd="setup-restart">' + tr("Restart now") + '</button></div>' +
+        '<p class="small">' + tr("Later: Kiri waits in the tray and picks up after your next restart.") + '</p>' };
 
       case 'choose': {
         var ex = !!s.existingUbuntu;
@@ -325,77 +346,77 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
         var ubSize = isNum(sz.ubuntu) ? mb(sz.ubuntu) : '—';
         var ratio = isNum(sz.kiri) && isNum(sz.ubuntu) && sz.kiri > 0 ? Math.round(sz.ubuntu / sz.kiri) : null;
         return { cls: 'choose', html:
-          '<div class="head"><h1 tabindex="-1">Where should your containers run?</h1><p class="lede md">Kiri runs Linux containers inside WSL, in a Linux of its own. Both choices run the same containers at the same speed; they differ in size and in what else you get.</p></div>' +
-          '<div class="opts" role="radiogroup" aria-label="Linux for Kiri">' +
+          '<div class="head"><h1 tabindex="-1">' + tr("Where should your containers run?") + '</h1><p class="lede md">' + tr("Kiri runs Linux containers inside WSL, in a Linux of its own. Both choices run the same containers at the same speed; they differ in size and in what else you get.") + '</p></div>' +
+          '<div class="opts" role="radiogroup" aria-label="' + tr("Linux for Kiri") + '">' +
             '<label class="opt"><div class="opt-art">' + ART.chooseKiri(kiriSize) + '</div><div class="opt-b">' +
-              '<div class="opt-h"><input type="radio" name="linux" value="kiri"><span class="opt-n">Kiri Linux</span><span class="badge">Recommended</span></div>' +
-              '<p class="opt-p">A tiny Linux made only for Kiri, built from Alpine. It stays out of sight and leaves with Kiri.</p>' +
-              '<dl class="facts"><div><dt>Download</dt><dd>Included</dd></div><div><dt>On disk</dt><dd>≈ 15 MB</dd></div><div><dt>Setup time</dt><dd>≈ 30 s*</dd></div><div><dt>Linux account</dt><dd>None</dd></div></dl>' +
-              '<ul class="pros"><li>+ No Microsoft Store, no username or password</li><li>+ Removed completely when you remove Kiri</li><li class="con">– Not a Linux to use yourself</li></ul>' +
+              '<div class="opt-h"><input type="radio" name="linux" value="kiri"><span class="opt-n">Kiri Linux</span><span class="badge">' + tr("Recommended") + '</span></div>' +
+              '<p class="opt-p">' + tr("A tiny Linux made only for Kiri, built from Alpine. It stays out of sight and leaves with Kiri.") + '</p>' +
+              '<dl class="facts"><div><dt>' + tr("Download") + '</dt><dd>' + tr("Included") + '</dd></div><div><dt>' + tr("On disk") + '</dt><dd>≈ 15 MB</dd></div><div><dt>' + tr("Setup time") + '</dt><dd>≈ 30 s*</dd></div><div><dt>' + tr("Linux account") + '</dt><dd>' + tr("None") + '</dd></div></dl>' +
+              '<ul class="pros"><li>' + tr("+ No Microsoft Store, no username or password") + '</li><li>' + tr("+ Removed completely when you remove Kiri") + '</li><li class="con">' + tr("– Not a Linux to use yourself") + '</li></ul>' +
             '</div></label>' +
-            '<label class="opt"><div class="opt-art">' + ART.chooseUbuntu(ex ? 'installed' : ubSize) + '</div><div class="opt-b">' +
+            '<label class="opt"><div class="opt-art">' + ART.chooseUbuntu(ex ? tr("installed") : ubSize) + '</div><div class="opt-b">' +
               '<div class="opt-h"><input type="radio" name="linux" value="ubuntu"><span class="opt-n">Ubuntu 26.04</span></div>' +
               (ex
-                ? '<p class="opt-p">Kiri will reuse the Ubuntu already installed on this PC. Kiri runs in it, and you keep opening it as your own Linux.</p>' +
-                  '<dl class="facts"><div><dt>Download</dt><dd>Nothing to download</dd></div><div><dt>On disk</dt><dd>Already there</dd></div><div><dt>Setup time</dt><dd>≈ 30 s*</dd></div><div><dt>Linux account</dt><dd>Yours</dd></div></dl>' +
-                  '<ul class="pros"><li>+ Uses the Ubuntu you already have: nothing to download</li><li>+ A complete Linux you can open from Start</li><li class="con">– Kiri shares it with your own Linux work</li></ul>'
-                : '<p class="opt-p">The full Ubuntu from Microsoft\'s WSL list. Kiri runs in it, and you can open it as your own Linux too.</p>' +
-                  '<dl class="facts"><div><dt>Download</dt><dd>' + ubSize + '</dd></div><div><dt>On disk</dt><dd>≈ 1.6 GB*</dd></div><div><dt>Setup time</dt><dd>≈ 2–4 min*</dd></div><div><dt>Linux account</dt><dd>Optional</dd></div></dl>' +
-                  '<ul class="pros"><li>+ A complete Linux you can open from Start</li><li>+ Already have Ubuntu? Kiri uses it: nothing to download</li>' +
-                  (ratio ? '<li class="con">– About ' + ratio + '× the download of Kiri Linux</li>' : '') + '</ul>') +
+                ? '<p class="opt-p">' + tr("Kiri will reuse the Ubuntu already installed on this PC. Kiri runs in it, and you keep opening it as your own Linux.") + '</p>' +
+                  '<dl class="facts"><div><dt>' + tr("Download") + '</dt><dd>' + tr("Nothing to download") + '</dd></div><div><dt>' + tr("On disk") + '</dt><dd>' + tr("Already there") + '</dd></div><div><dt>' + tr("Setup time") + '</dt><dd>≈ 30 s*</dd></div><div><dt>' + tr("Linux account") + '</dt><dd>' + tr("Yours") + '</dd></div></dl>' +
+                  '<ul class="pros"><li>' + tr("+ Uses the Ubuntu you already have: nothing to download") + '</li><li>' + tr("+ A complete Linux you can open from Start") + '</li><li class="con">' + tr("– Kiri shares it with your own Linux work") + '</li></ul>'
+                : '<p class="opt-p">' + tr("The full Ubuntu from Microsoft's WSL list. Kiri runs in it, and you can open it as your own Linux too.") + '</p>' +
+                  '<dl class="facts"><div><dt>' + tr("Download") + '</dt><dd>' + ubSize + '</dd></div><div><dt>' + tr("On disk") + '</dt><dd>≈ 1.6 GB*</dd></div><div><dt>' + tr("Setup time") + '</dt><dd>≈ 2–4 min*</dd></div><div><dt>' + tr("Linux account") + '</dt><dd>' + tr("Optional") + '</dd></div></dl>' +
+                  '<ul class="pros"><li>' + tr("+ A complete Linux you can open from Start") + '</li><li>' + tr("+ Already have Ubuntu? Kiri uses it: nothing to download") + '</li>' +
+                  (ratio ? '<li class="con">' + tr("– About {ratio}× the download of Kiri Linux", { ratio: ratio }) + '</li>' : '') + '</ul>') +
             '</div></label>' +
           '</div>' + ERR +
-          '<div class="foot"><p class="small">' + (ex ? 'Ubuntu is already on this PC, so choosing it downloads nothing.' : (isNum(sz.ubuntu) ? ubSize + ' is Ubuntu\'s download today.' : '')) + ' * Estimates until measured on a clean PC.</p>' +
-          '<button type="button" class="btn primary" data-act="choose" id="chooseBtn">Set up with Kiri Linux</button></div>' };
+          '<div class="foot"><p class="small">' + (ex ? tr("Ubuntu is already on this PC, so choosing it downloads nothing.") : (isNum(sz.ubuntu) ? tr("{size} is Ubuntu's download today.", { size: ubSize }) : '')) + ' ' + tr("* Estimates until measured on a clean PC.") + '</p>' +
+          '<button type="button" class="btn primary" data-act="choose" id="chooseBtn">' + tr("Set up with Kiri Linux") + '</button></div>' };
       }
 
       case 'linux':
         if (s.linux === 'ubuntu') {
           var exu = !!s.existingUbuntu;
           return { cls: '', html:
-            hero(ART.linuxUbuntu, 'Step 2 of 5', exu ? 'Setting up Ubuntu 26.04' : 'Downloading Ubuntu 26.04', exu ? 'Using the Ubuntu already on this PC: nothing to download.' : 'From ubuntu.com, through Microsoft\'s WSL list.') +
-            '<section class="card" aria-label="Progress">' + PROG + TASKS + '</section>' +
-            '<p class="note">No Linux username is needed now: Kiri runs inside Ubuntu on its own. Ubuntu asks for one only the first time you open it yourself. * Estimate.</p>' +
-            ERR + '<div class="foot">' + (exu ? '' : '<button type="button" class="btn" data-cmd="setup-switch" data-value="kiri">Use Kiri Linux instead</button>') + CANCEL + '</div>' };
+            hero(ART.linuxUbuntu, tr("Step 2 of 5"), exu ? tr("Setting up Ubuntu 26.04") : tr("Downloading Ubuntu 26.04"), exu ? tr("Using the Ubuntu already on this PC: nothing to download.") : tr("From ubuntu.com, through Microsoft's WSL list.")) +
+            '<section class="card" aria-label="' + tr("Progress") + '">' + PROG + TASKS + '</section>' +
+            '<p class="note">' + tr("No Linux username is needed now: Kiri runs inside Ubuntu on its own. Ubuntu asks for one only the first time you open it yourself. * Estimate.") + '</p>' +
+            ERR + '<div class="foot">' + (exu ? '' : '<button type="button" class="btn" data-cmd="setup-switch" data-value="kiri">' + tr("Use Kiri Linux instead") + '</button>') + CANCEL + '</div>' };
         }
         return { cls: '', html:
-          hero(ART.linuxKiri, 'Step 2 of 5', 'Setting up Kiri Linux', 'Nothing to download: it came inside Kiri.') +
-          '<section class="card" aria-label="Progress">' + PROG + TASKS + LOG(false) + '</section>' +
+          hero(ART.linuxKiri, tr("Step 2 of 5"), tr("Setting up Kiri Linux"), tr("Nothing to download: it came inside Kiri.")) +
+          '<section class="card" aria-label="' + tr("Progress") + '">' + PROG + TASKS + LOG(false) + '</section>' +
           ERR + '<div class="foot">' + CANCEL + '</div>' };
 
       case 'engine': return { cls: '', html:
-        hero(ART.engine, 'Step 3 of 5', 'Starting Kiri’s engine', 'The part that runs your containers, inside ' + esc(linuxName(s.linux, true)) + '.') +
-        '<section class="card tight" aria-label="Progress">' + PROG + TASKS + LOG(true) + '</section>' +
+        hero(ART.engine, tr("Step 3 of 5"), tr("Starting Kiri’s engine"), tr("The part that runs your containers, inside {linux}.", { linux: esc(linuxName(s.linux, true)) })) +
+        '<section class="card tight" aria-label="' + tr("Progress") + '">' + PROG + TASKS + LOG(true) + '</section>' +
         ERR + '<div class="foot">' + CANCEL + '</div>' };
 
       case 'tools': return { cls: '', html:
-        '<div class="head"><span class="eyebrow">Step 4 of 5</span><h1 tabindex="-1">Setting up the Docker tools</h1><p class="lede">The same docker commands you know, talking to Kiri. Each file is checked against its pinned SHA-256.</p></div>' +
-        PROG + '<ul class="tools" data-slot="tools" aria-label="Docker tools"></ul>' +
-        '<section class="box"><span class="box-t" id="mkT">Make Kiri the default for docker</span>' +
+        '<div class="head"><span class="eyebrow">' + tr("Step 4 of 5") + '</span><h1 tabindex="-1">' + tr("Setting up the Docker tools") + '</h1><p class="lede">' + tr("The same docker commands you know, talking to Kiri. Each file is checked against its pinned SHA-256.") + '</p></div>' +
+        PROG + '<ul class="tools" data-slot="tools" aria-label="' + tr("Docker tools") + '"></ul>' +
+        '<section class="box"><span class="box-t" id="mkT">' + tr("Make Kiri the default for docker") + '</span>' +
         '<label class="check"><input type="checkbox" id="mk" aria-describedby="mkT">' +
         (s.otherDocker
-          ? 'docker, docker compose and docker build use Kiri in every new terminal. Another Docker was found on this PC; leave this off to keep using it as the default.'
-          : 'docker, docker compose and docker build use Kiri in every new terminal. No other Docker was found on this PC.') +
+          ? tr("docker, docker compose and docker build use Kiri in every new terminal. Another Docker was found on this PC; leave this off to keep using it as the default.")
+          : tr("docker, docker compose and docker build use Kiri in every new terminal. No other Docker was found on this PC.")) +
         '</label></section>' +
         // Another engine, and docker stays on it: which builds docker build.
         (s.otherDocker
-          ? '<section class="box" data-slot="bw"><span class="box-t" id="bwT">Builds</span>' +
-            '<label class="check"><input type="radio" name="bw" value="docker" aria-describedby="bwT"><span><b>Keep building with Docker.</b> Nothing changes: docker build builds where it does now, and the images stay in ' + esc(s.otherEngine || 'your other Docker') + '.</span></label>' +
-            '<label class="check"><input type="radio" name="bw" value="kiri" aria-describedby="bwT"><span><b>Build with Kiri.</b> docker build and docker compose build run on Kiri, and the images are in Kiri. ' + esc(s.otherEngine || 'Your other Docker') + ' won’t see them. You can switch any time in Settings → Builds.</span></label></section>'
+          ? '<section class="box" data-slot="bw"><span class="box-t" id="bwT">' + tr("Builds") + '</span>' +
+            '<label class="check"><input type="radio" name="bw" value="docker" aria-describedby="bwT"><span>' + tr("<b>Keep building with Docker.</b> Nothing changes: docker build builds where it does now, and the images stay in {engine}.", { engine: esc(s.otherEngine || tr("your other Docker")) }) + '</span></label>' +
+            '<label class="check"><input type="radio" name="bw" value="kiri" aria-describedby="bwT"><span>' + tr("<b>Build with Kiri.</b> docker build and docker compose build run on Kiri, and the images are in Kiri. {engine} won’t see them. You can switch any time in Settings → Builds.", { engine: esc(s.otherEngine || tr("Your other Docker")) }) + '</span></label></section>'
           : '') + ERR + '<div class="foot">' + CANCEL + '</div>' };
 
       case 'ready': return { cls: 'center', html:
-        ART.ready + '<h1 class="xl" tabindex="-1">Kiri is ready</h1>' +
-        '<p class="lede lg" style="max-width:540px">Your test container said hello. Open a new terminal and try it yourself:</p>' +
-        '<div class="cmd"><span class="p" aria-hidden="true">$</span><code>docker run --rm alpine echo hello</code><button type="button" class="btn sm" data-act="copy" aria-live="polite">Copy</button></div>' +
-        '<label class="check inline"><input type="checkbox" id="auto">Start Kiri when I sign in (in the tray)</label>' +
-        ERR + '<button type="button" class="btn primary xl" data-cmd="setup-open">Open Kiri</button>' };
+        ART.ready + '<h1 class="xl" tabindex="-1">' + tr("Kiri is ready") + '</h1>' +
+        '<p class="lede lg" style="max-width:540px">' + tr("Your test container said hello. Open a new terminal and try it yourself:") + '</p>' +
+        '<div class="cmd"><span class="p" aria-hidden="true">$</span><code>docker run --rm alpine echo hello</code><button type="button" class="btn sm" data-act="copy" aria-live="polite">' + tr("Copy") + '</button></div>' +
+        '<label class="check inline"><input type="checkbox" id="auto">' + tr("Start Kiri when I sign in (in the tray)") + '</label>' +
+        ERR + '<button type="button" class="btn primary xl" data-cmd="setup-open">' + tr("Open Kiri") + '</button>' };
 
       default: return { cls: '', html: /* welcome */
-        '<div class="hero lgx">' + ART.welcome + '<div class="hero-t"><h1 class="xl" tabindex="-1">Welcome to Kiri</h1><p class="lede lg">Kiri runs Linux containers on Windows without Docker Desktop. It needs Windows Subsystem for Linux (WSL), Microsoft\'s own way to run Linux, which this PC doesn\'t have yet.</p></div></div>' +
-        '<section class="size">' + ART.download + '<div class="size-t"><span class="size-n">' + (isNum(sz.wsl) ? mb(sz.wsl) : '—') + '</span><span class="size-s">WSL, downloaded from Microsoft</span></div></section>' +
-        ERR + '<div class="foot"><a href="https://learn.microsoft.com/windows/wsl/about" data-open>What is WSL?</a><span class="grow"></span>' +
-        '<button type="button" class="btn" data-cmd="setup-quit">Quit</button><button type="button" class="btn primary" data-cmd="setup-install-wsl">Install WSL</button></div>' };
+        '<div class="hero lgx">' + ART.welcome + '<div class="hero-t"><h1 class="xl" tabindex="-1">' + tr("Welcome to Kiri") + '</h1><p class="lede lg">' + tr("Kiri runs Linux containers on Windows without Docker Desktop. It needs Windows Subsystem for Linux (WSL), Microsoft's own way to run Linux, which this PC doesn't have yet.") + '</p></div></div>' +
+        '<section class="size">' + ART.download + '<div class="size-t"><span class="size-n">' + (isNum(sz.wsl) ? mb(sz.wsl) : '—') + '</span><span class="size-s">' + tr("WSL, downloaded from Microsoft") + '</span></div></section>' +
+        ERR + '<div class="foot"><a href="https://learn.microsoft.com/windows/wsl/about" data-open>' + tr("What is WSL?") + '</a><span class="grow"></span>' +
+        '<button type="button" class="btn" data-cmd="setup-quit">' + tr("Quit") + '</button><button type="button" class="btn primary" data-cmd="setup-install-wsl">' + tr("Install WSL") + '</button></div>' };
     }
   }
 
@@ -408,23 +429,23 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
     var nDone = tasks.filter(function (t) { return t && t.state === 'done'; }).length;
     var ln = linuxName(s.linux, true);
     var items = [
-      { t: 'Windows Subsystem for Linux', f: '', c: step === 'wsl' ? 'Installing' + (pct ? ' · ' + pct : '') : step === 'restart' ? 'Needs a restart' : 'Now', d: 'Installed' },
-      { t: step === 'choose' ? 'Choose a Linux' : 'Linux', f: step === 'restart' ? 'After the restart' : 'Choose and install',
-        c: step === 'choose' ? 'Now' : s.linux === 'ubuntu' ? ('Ubuntu · ' + (s.existingUbuntu ? '' : 'downloading ') + pct).trim() : ln + (pct ? ' · ' + pct : ''), d: s.linux ? ln : '' },
-      { t: 'Kiri’s engine', f: 'Runs your containers', c: 'Starting', d: 'Running' },
-      { t: 'Docker tools', f: 'docker, Compose, buildx', c: tasks.length ? nDone + ' of ' + tasks.length : 'Now', d: '' },
-      { t: 'Ready', f: 'docker run, from any terminal', c: '', d: '' }
+      { t: tr("Windows Subsystem for Linux"), f: '', c: step === 'wsl' ? tr("Installing") + (pct ? ' · ' + pct : '') : step === 'restart' ? tr("Needs a restart") : tr("Now"), d: tr("Installed") },
+      { t: step === 'choose' ? tr("Choose a Linux") : 'Linux', f: step === 'restart' ? tr("After the restart") : tr("Choose and install"),
+        c: step === 'choose' ? tr("Now") : s.linux === 'ubuntu' ? ('Ubuntu · ' + (s.existingUbuntu ? '' : tr("downloading") + ' ') + pct).trim() : ln + (pct ? ' · ' + pct : ''), d: s.linux ? ln : '' },
+      { t: tr("Kiri’s engine"), f: tr("Runs your containers"), c: tr("Starting"), d: tr("Running") },
+      { t: tr("Docker tools"), f: 'docker, Compose, buildx', c: tasks.length ? tr("{done} of {total}", { done: nDone, total: tasks.length }) : tr("Now"), d: '' },
+      { t: tr("Ready"), f: tr("docker run, from any terminal"), c: '', d: '' }
     ];
     var html = items.map(function (it, i) {
       var state = step === 'ready' || i < cur ? 'done' : i === cur ? 'cur' : 'todo';
-      var sub = state === 'done' ? (step === 'ready' ? '' : it.d) : state === 'cur' ? (s.error ? 'Stopped' : it.c.replace(/ ·\s*$/, '')) : (showFuture || (step === 'restart' && i === 1) ? it.f : '');
-      var sr = state === 'done' ? ' (done)' : state === 'cur' ? ' (current step)' : '';
+      var sub = state === 'done' ? (step === 'ready' ? '' : it.d) : state === 'cur' ? (s.error ? tr("Stopped") : it.c.replace(/ ·\s*$/, '')) : (showFuture || (step === 'restart' && i === 1) ? it.f : '');
+      var sr = state === 'done' ? tr(" (done)") : state === 'cur' ? tr(" (current step)") : '';
       return '<li class="' + state + '"' + (state === 'cur' ? ' aria-current="step"' : '') + '><span class="num" aria-hidden="true">' + (state === 'done' ? CHECK_RAIL : i + 1) + '</span>' +
         '<span class="st"><span class="st-t">' + it.t + '<span class="sr">' + sr + '</span></span>' + (sub ? '<span class="st-s' + (state === 'cur' && s.error ? ' bad' : '') + '">' + esc(sub) + '</span>' : '') + '</span></li>';
     }).join('');
     var steps = document.getElementById('steps');
     if (steps.innerHTML !== html) steps.innerHTML = html;
-    var foot = { welcome: 'Kiri sets itself up for your Windows account only.', wsl: 'Keep using your PC meanwhile.', choose: 'Step 2 of 5. Nothing else on this PC changes: Kiri sets itself up for your Windows account only.' }[step];
+    var foot = { welcome: tr("Kiri sets itself up for your Windows account only."), wsl: tr("Keep using your PC meanwhile."), choose: tr("Step 2 of 5. Nothing else on this PC changes: Kiri sets itself up for your Windows account only.") }[step];
     var rf = document.getElementById('railFoot');
     rf.hidden = !foot; setText(rf, foot || '');
   }
@@ -438,22 +459,22 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
     var pctEl = el.querySelector('.pct'); setText(pctEl, ind ? '' : Math.round(pct) + '%'); pctEl.hidden = ind;
     setText(el.querySelector('.plabel'), p.label || '');
     var eta = '';
-    if (isNum(p.eta) && p.eta >= 0) eta = p.eta >= 120 ? 'about ' + Math.round(p.eta / 60) + ' min left' : 'about ' + Math.max(1, Math.round(p.eta)) + ' s left';
+    if (isNum(p.eta) && p.eta >= 0) eta = p.eta >= 120 ? tr("about {min} min left", { min: Math.round(p.eta / 60) }) : tr("about {sec} s left", { sec: Math.max(1, Math.round(p.eta)) });
     setText(el.querySelector('.eta'), eta);
     var bar = el.querySelector('.bar'), fill = bar.firstChild;
     bar.classList.toggle('ind', ind);
     fill.style.width = ind ? '' : pct + '%';
     if (ind) bar.removeAttribute('aria-valuenow'); else bar.setAttribute('aria-valuenow', String(Math.round(pct)));
-    bar.setAttribute('aria-label', p.label || 'Progress');
+    bar.setAttribute('aria-label', p.label || tr("Progress"));
     var sized = isNum(p.total) && p.total > 0;
     el.querySelector('.pmeta').hidden = !sized;
     if (sized) {
-      setText(el.querySelector('.bytes'), (isNum(p.done) ? mbN(p.done) : 0) + ' of ' + mb(p.total));
+      setText(el.querySelector('.bytes'), tr("{done} of {total}", { done: isNum(p.done) ? mbN(p.done) : 0, total: mb(p.total) }));
       setText(el.querySelector('.rate'), isNum(p.rate) && p.rate > 0 ? (p.rate / 1e6).toFixed(1) + ' MB/s' : '');
     }
   }
 
-  var STATE_WORD = { done: 'done', active: 'in progress', todo: 'to do', error: 'failed' };
+  var STATE_WORD = { done: tr("done"), active: tr("in progress"), todo: tr("to do"), error: tr("failed") };
   var normState = function (st) { return STATE_WORD[st] ? st : 'todo'; };
 
   function updTasks(ol, tasks) {
@@ -481,7 +502,7 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
     ol.hidden = !tasks.length;
   }
 
-  var TOOL_STATE = { done: '✓ Installed', active: 'Setting up', todo: 'Waiting', error: 'Failed' };
+  var TOOL_STATE = { done: tr("✓ Installed"), active: tr("Setting up"), todo: tr("Waiting"), error: tr("Failed") };
   function updTools(ul, tasks) {
     if (!ul) return;
     tasks = Array.isArray(tasks) ? tasks.filter(Boolean) : [];
@@ -523,7 +544,7 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
     if (!slot) return;
     if (err == null || err === '') { if (slot.firstChild) slot.innerHTML = ''; return; }
     if (!slot.firstChild) {
-      slot.innerHTML = '<div class="err"><span class="err-i" aria-hidden="true">!</span><span class="err-t"></span><button type="button" class="btn" data-cmd="setup-retry">Try again</button></div>';
+      slot.innerHTML = '<div class="err"><span class="err-i" aria-hidden="true">!</span><span class="err-t"></span><button type="button" class="btn" data-cmd="setup-retry">' + tr("Try again") + '</button></div>';
     }
     setText(slot.querySelector('.err-t'), err);
   }
@@ -562,7 +583,7 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
     var r = main.querySelectorAll('input[name=linux]');
     for (var i = 0; i < r.length; i++) r[i].checked = r[i].value === choice;
     var cb = document.getElementById('chooseBtn');
-    if (cb) setText(cb, choice === 'ubuntu' ? 'Set up with Ubuntu' : 'Set up with Kiri Linux');
+    if (cb) setText(cb, choice === 'ubuntu' ? tr("Set up with Ubuntu") : tr("Set up with Kiri Linux"));
     var mk = document.getElementById('mk'); if (mk) mk.checked = effective(s, 'makeDefault');
     var au = document.getElementById('auto'); if (au) au.checked = effective(s, 'autostart');
     // Kiri as docker's default builds on Kiri anyway: the question is only for docker staying elsewhere.
@@ -584,8 +605,8 @@ main.choose .foot{position:sticky;bottom:-24px;margin-bottom:-24px;padding:14px 
     if (b.dataset.act === 'choose') send('setup-choose', { value: choice });
     else if (b.dataset.act === 'copy') {
       send('copy', { value: 'docker run --rm alpine echo hello' });
-      b.textContent = 'Copied'; clearTimeout(copyTimer);
-      copyTimer = setTimeout(function () { b.textContent = 'Copy'; }, 1600);
+      b.textContent = tr("Copied"); clearTimeout(copyTimer);
+      copyTimer = setTimeout(function () { b.textContent = tr("Copy"); }, 1600);
     }
   });
   main.addEventListener('change', function (ev) {

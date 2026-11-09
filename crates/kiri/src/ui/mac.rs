@@ -123,7 +123,7 @@ fn make_window(mtm: MainThreadMarker, tx: Sender<Cmd>, autostart: bool, view: Op
         // Let the page paint its own background instead of white.
         let no: Retained<AnyObject> = msg_send![objc2::class!(NSNumber), numberWithBool: false];
         let _: () = msg_send![&webview, setValue: &*no, forKey: &*NSString::from_str("drawsBackground")];
-        webview.loadHTMLString_baseURL(&NSString::from_str(&super::assemble::page(PAGE)), None);
+        webview.loadHTMLString_baseURL(&NSString::from_str(&super::assemble::page(PAGE, prefs()["lang"].as_str())), None);
         webview
     };
     window.setContentView(Some(&webview));
@@ -244,6 +244,9 @@ fn show_window(mtm: MainThreadMarker) {
 /// The app menu, so the standard shortcuts work: ⌘Q quits (the daemon keeps
 /// running), ⌘W closes, ⌘H hides, ⌘, opens Settings.
 fn main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
+    let l = super::lang::resolve(prefs()["lang"].as_str());
+    let tr = |en: &str| super::lang::tr(l, en);
+    let app = |en: &str| tr(en).replace("{app}", crate::flavor::APP.get());
     let item = |title: &str, action, key: &str| {
         // SAFETY: standard menu item construction on the main thread.
         unsafe {
@@ -256,29 +259,39 @@ fn main_menu(mtm: MainThreadMarker) -> Retained<NSMenu> {
         }
     };
     let app_menu = NSMenu::new(mtm);
-    app_menu.addItem(&item("Check for Updates…", sel!(checkForUpdates:), ""));
+    app_menu.addItem(&item(&tr("Check for Updates…"), sel!(checkForUpdates:), ""));
     app_menu.addItem(&NSMenuItem::separatorItem(mtm));
-    app_menu.addItem(&item("Settings…", sel!(openSettings:), ","));
+    app_menu.addItem(&item(&tr("Settings…"), sel!(openSettings:), ","));
     app_menu.addItem(&NSMenuItem::separatorItem(mtm));
-    app_menu.addItem(&item(&format!("Hide {}", crate::flavor::APP), sel!(hide:), "h"));
+    app_menu.addItem(&item(&app("Hide {app}"), sel!(hide:), "h"));
     // ⌘W asks the page first: in the built-in terminal it closes a pane.
-    app_menu.addItem(&item("Close Window", sel!(closeKey:), "w"));
+    app_menu.addItem(&item(&tr("Close Window"), sel!(closeKey:), "w"));
     app_menu.addItem(&NSMenuItem::separatorItem(mtm));
-    app_menu.addItem(&item(&format!("Quit {}", crate::flavor::APP), sel!(terminate:), "q"));
+    app_menu.addItem(&item(&app("Quit {app}"), sel!(terminate:), "q"));
     let app_item = NSMenuItem::new(mtm);
     app_item.setSubmenu(Some(&app_menu));
     // View: ⌘+ / ⌘− / ⌘0 step the text size Settings → Appearance sets.
     let view_menu = NSMenu::new(mtm);
-    view_menu.setTitle(&NSString::from_str("View"));
-    view_menu.addItem(&item("Actual Size", sel!(textActualSize:), "0"));
-    view_menu.addItem(&item("Zoom In", sel!(textBigger:), "+"));
-    view_menu.addItem(&item("Zoom Out", sel!(textSmaller:), "-"));
+    view_menu.setTitle(&NSString::from_str(&tr("View")));
+    view_menu.addItem(&item(&tr("Actual Size"), sel!(textActualSize:), "0"));
+    view_menu.addItem(&item(&tr("Zoom In"), sel!(textBigger:), "+"));
+    view_menu.addItem(&item(&tr("Zoom Out"), sel!(textSmaller:), "-"));
     let view_item = NSMenuItem::new(mtm);
     view_item.setSubmenu(Some(&view_menu));
     let bar = NSMenu::new(mtm);
     bar.addItem(&app_item);
     bar.addItem(&view_item);
     bar
+}
+
+/// The language setting changed: the menu bar's words follow. The page does
+/// its own, and the menu bar icon's menu is drawn fresh each time it opens.
+pub(super) fn relang() {
+    DispatchQueue::main().exec_async(|| {
+        if let Some(mtm) = MainThreadMarker::new() {
+            NSApplication::sharedApplication(mtm).setMainMenu(Some(&main_menu(mtm)));
+        }
+    });
 }
 
 /// Runs JavaScript in the page. Callable from any thread.
@@ -587,12 +600,14 @@ impl AppDelegate {
                 menu.addItem(&item);
             }
         };
-        add(&format!("Linux VM: {}", state.vm), None, "", 0);
+        let l = super::lang::resolve(prefs()["lang"].as_str());
+        let tr = |en: &str| super::lang::tr(l, en);
+        add(&tr("Linux VM: {state}").replace("{state}", &tr(state.vm)), None, "", 0);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         let mut shown = self.ivars().shown.borrow_mut();
         shown.clear();
         if state.running.is_empty() {
-            add("No containers running", None, "", 0);
+            add(&tr("No containers running"), None, "", 0);
         }
         for (i, (id, name, url)) in state.running.iter().take(12).enumerate() {
             let title = match url {
@@ -603,15 +618,15 @@ impl AppDelegate {
             shown.push((id.clone(), url.clone()));
         }
         if state.running.len() > 12 {
-            add(&format!("and {} more…", state.running.len() - 12), Some(sel!(openWindow:)), "", 0);
+            add(&tr("and {n} more…").replace("{n}", &(state.running.len() - 12).to_string()), Some(sel!(openWindow:)), "", 0);
         }
         menu.addItem(&NSMenuItem::separatorItem(mtm));
-        add("Open Kiri", Some(sel!(openWindow:)), "o", 0);
-        add("Settings…", Some(sel!(openSettings:)), ",", 0);
-        add(if state.vm == "Running" { "Stop Linux VM" } else { "Start Linux VM" }, Some(sel!(toggleVm:)), "", 0);
+        add(&tr("Open Kiri"), Some(sel!(openWindow:)), "o", 0);
+        add(&tr("Settings…"), Some(sel!(openSettings:)), ",", 0);
+        add(&if state.vm == "Running" { tr("Stop Linux VM") } else { tr("Start Linux VM") }, Some(sel!(toggleVm:)), "", 0);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
         // SAFETY: standard menu item construction; terminate: goes to the app.
-        let quit = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str("Quit Kiri"), Some(sel!(terminate:)), &NSString::from_str("q")) };
+        let quit = unsafe { NSMenuItem::initWithTitle_action_keyEquivalent(NSMenuItem::alloc(mtm), &NSString::from_str(&tr("Quit Kiri")), Some(sel!(terminate:)), &NSString::from_str("q")) };
         menu.addItem(&quit);
     }
 }

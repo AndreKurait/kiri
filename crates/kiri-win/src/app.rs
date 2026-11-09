@@ -57,7 +57,7 @@ pub fn in_setup() -> bool {
 }
 
 fn page_html() -> String {
-    if SETUP.load(Ordering::SeqCst) { SETUP_PAGE.to_owned() } else { crate::assemble::page(PAGE) }
+    if SETUP.load(Ordering::SeqCst) { crate::assemble::words(SETUP_PAGE, crate::engine::prefs()["lang"].as_str()) } else { crate::assemble::page(PAGE, crate::engine::prefs()["lang"].as_str()) }
 }
 /// Kiri's icon cropped to its artwork for Windows (brand/windows-icons.ps1),
 /// by size: the Mac's has Apple's margin and looks small in the taskbar.
@@ -459,18 +459,20 @@ fn tray_menu(hwnd: HWND) {
         let item = |flags, id: usize, text: &str| {
             let _ = AppendMenuW(m, flags, id, &HSTRING::from(text));
         };
-        item(MF_STRING, ID_OPEN, "Open Kiri");
+        let l = crate::lang::resolve(crate::engine::prefs()["lang"].as_str());
+        let tr = |en: &str| crate::lang::tr(l, en);
+        item(MF_STRING, ID_OPEN, &tr("Open Kiri"));
         item(MF_SEPARATOR, 0, "");
-        item(MF_STRING | MF_GRAYED, 0, &format!("Kiri: {}", if menu.vm.is_empty() { "…" } else { &menu.vm }));
+        item(MF_STRING | MF_GRAYED, 0, &tr("Kiri: {state}").replace("{state}", &if menu.vm.is_empty() { "…".to_owned() } else { tr(&menu.vm) }));
         for (i, (_, name)) in menu.running.iter().enumerate().take(20) {
             item(MF_STRING, ID_CONTAINER + i, &format!("    {name}"));
         }
         item(MF_SEPARATOR, 0, "");
-        item(MF_STRING, ID_START, "Start");
-        item(MF_STRING, ID_STOP, "Stop");
+        item(MF_STRING, ID_START, &tr("Start"));
+        item(MF_STRING, ID_STOP, &tr("Stop"));
         item(MF_SEPARATOR, 0, "");
-        item(MF_STRING, ID_UPDATE, "Check for Updates…");
-        item(MF_STRING, ID_QUIT, "Quit Kiri");
+        item(MF_STRING, ID_UPDATE, &tr("Check for Updates…"));
+        item(MF_STRING, ID_QUIT, &tr("Quit Kiri"));
         let mut p = POINT::default();
         let _ = GetCursorPos(&mut p);
         // The menu closes when clicking elsewhere only if we are foreground.

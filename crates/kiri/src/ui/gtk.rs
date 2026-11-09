@@ -74,7 +74,7 @@ pub fn run(autostart: bool, view: Option<String>) -> io::Result<()> {
         settings.set_hardware_acceleration_policy(webkit2gtk::HardwareAccelerationPolicy::Never);
         settings.set_enable_write_console_messages_to_stdout(cfg!(debug_assertions));
     }
-    webview.load_html(&super::assemble::page(PAGE), None);
+    webview.load_html(&super::assemble::page(PAGE, super::prefs()["lang"].as_str()), None);
     window.add(&webview);
     // Before set_appearance, which gives it its background.
     WEBVIEW.with(|v| *v.borrow_mut() = Some(webview));
@@ -101,6 +101,10 @@ fn icon() -> Option<Pixbuf> {
 }
 
 /// Runs JavaScript in the page. Callable from any thread.
+/// The language setting changed: the page redraws its own words, and the
+/// GTK window draws none of its own.
+pub(super) fn relang() {}
+
 pub(super) fn eval(js: String) {
     glib::MainContext::default().invoke(move || {
         WEBVIEW.with(|v| {

@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::app::Handle;
+use crate::engine::{tr, trf};
 
 /// A file setup downloads: what it is, from where, and what it must hash to.
 #[derive(Debug)]
@@ -286,8 +287,8 @@ fn update(f: impl FnOnce(&mut State)) {
     Handle.eval(format!("window.kiri && kiri.on({json})"));
 }
 
-fn tasks(labels: &[&str]) -> Vec<Task> {
-    labels.iter().map(|l| Task { label: (*l).to_owned(), state: "todo", detail: String::new() }).collect()
+fn tasks(labels: &[String]) -> Vec<Task> {
+    labels.iter().map(|l| Task { label: l.clone(), state: "todo", detail: String::new() }).collect()
 }
 
 fn task(i: usize, state: &'static str, detail: &str) {
@@ -368,12 +369,12 @@ fn download(pin: &Pin, task_index: usize) -> io::Result<PathBuf> {
     std::fs::create_dir_all(&dl)?;
     let dest = dl.join(pin.file);
     if dest.is_file() && sha256(&dest)? == pin.sha256 {
-        task(task_index, "done", &format!("{} MB · already here", mb(pin.size)));
+        task(task_index, "done", &trf("{size} MB · already here", &[("size", &mb(pin.size))]));
         return Ok(dest);
     }
     let part = dl.join(format!("{}.part", pin.file));
     let _ = std::fs::remove_file(&part);
-    let label = format!("Downloading {} from {}", pin.name, if pin.url.contains("github.com/microsoft") { "Microsoft" } else { "ubuntu.com" });
+    let label = trf("Downloading {name} from {source}", &[("name", &pin.name), ("source", &if pin.url.contains("github.com/microsoft") { "Microsoft" } else { "ubuntu.com" })]);
     task(task_index, "active", &format!("0 / {} MB", mb(pin.size)));
     let mut child = quiet("curl.exe").args(["-fsSL", "--retry", "3", "-o"]).arg(&part).arg(pin.url).spawn()?;
     let (start, mut last, mut rate) = (Instant::now(), (Instant::now(), 0u64), 0f64);
@@ -412,7 +413,7 @@ fn download(pin: &Pin, task_index: usize) -> io::Result<PathBuf> {
         return Err(io::Error::other(format!("{} did not match its SHA-256 (got {got})", pin.name)));
     }
     std::fs::rename(&part, &dest)?;
-    task(task_index, "done", &format!("{} MB in {} s", mb(pin.size), start.elapsed().as_secs()));
+    task(task_index, "done", &trf("{size} MB in {secs} s", &[("size", &mb(pin.size)), ("secs", &start.elapsed().as_secs())]));
     Ok(dest)
 }
 
@@ -453,14 +454,14 @@ fn elevated(args: &[&str]) -> io::Result<i32> {
 /// Step 1: download WSL, then in one elevated run turn on Virtual Machine
 /// Platform and install WSL. Exit 3010 from either means a restart.
 fn install_wsl() -> io::Result<()> {
-    update(|s| s.tasks = tasks(&["Download WSL", "Administrator approval", "Turn on Virtual Machine Platform", "Install WSL"]));
+    update(|s| s.tasks = tasks(&[tr("Download WSL"), tr("Administrator approval"), tr("Turn on Virtual Machine Platform"), tr("Install WSL")]));
     // WSL_MSI is this build's architecture's; on another PC it would not install.
     if let Some(e) = crate::win::arch_mismatch() {
         return Err(io::Error::other(e));
     }
     let msi = download(&WSL_MSI, 0)?;
-    update(|s| s.progress = Some(json!({"pct": null, "done": null, "total": null, "rate": null, "eta": null, "label": "Waiting for Windows' approval"})));
-    task(1, "active", "Windows is asking");
+    update(|s| s.progress = Some(json!({"pct": null, "done": null, "total": null, "rate": null, "eta": null, "label": tr("Waiting for Windows' approval")})));
+    task(1, "active", &tr("Windows is asking"));
     // The downloaded MSI lives in a user-writable folder, so a process at
     // the user's own integrity could swap it between its SHA-256 check above
     // and the elevated install. kiri-admin.ps1 -Wsl re-verifies it, as admin,
@@ -468,7 +469,7 @@ fn install_wsl() -> io::Result<()> {
     // before running it; its exit codes are read below.
     let msi = msi.to_string_lossy();
     let code = elevated(&["-Wsl", "-Msi", &msi, "-Sha256", WSL_MSI.sha256])?;
-    task(1, "done", "approved");
+    task(1, "done", &tr("approved"));
     match code {
         22 => return Err(io::Error::other("the downloaded WSL installer changed on disk; try again")),
         23 => return Err(io::Error::other("the WSL installer is not validly signed by Microsoft")),
@@ -521,7 +522,7 @@ fn install_linux(kind: &str) -> io::Result<()> {
     let base = dir().join("wsl");
     std::fs::create_dir_all(&base)?;
     let distro = if kind == "kiri" {
-        update(|s| s.tasks = tasks(&["Unpack Kiri Linux", "Add it to WSL", "Start it"]));
+        update(|s| s.tasks = tasks(&[tr("Unpack Kiri Linux"), tr("Add it to WSL"), tr("Start it")]));
         task(0, "active", "");
         let tar = verified("kiri-linux.tar.gz")?;
         task(0, "done", &format!("{} MB", std::fs::metadata(&tar)?.len().div_ceil(1_000_000)));
@@ -539,12 +540,12 @@ fn install_linux(kind: &str) -> io::Result<()> {
         let existing = existing_ubuntu();
         let distro = match existing {
             Some(d) => {
-                update(|s| s.tasks = tasks(&["Use the Ubuntu already here", "Install Kiri's engine in it", "Start it"]));
+                update(|s| s.tasks = tasks(&[tr("Use the Ubuntu already here"), tr("Install Kiri's engine in it"), tr("Start it")]));
                 task(0, "done", &d);
                 d
             }
             None => {
-                update(|s| s.tasks = tasks(&["Download Ubuntu", "Unpack it into WSL", "Install Kiri's engine in it", "Start it"]));
+                update(|s| s.tasks = tasks(&[tr("Download Ubuntu"), tr("Unpack it into WSL"), tr("Install Kiri's engine in it"), tr("Start it")]));
                 let file = download(&UBUNTU, 0)?;
                 update(|s| s.progress = None);
                 task(1, "active", "≈ 1.6 GB");
@@ -604,7 +605,7 @@ fn engine() -> io::Result<()> {
     update(|s| {
         s.step = "engine";
         s.progress = None;
-        s.tasks = tasks(&["Start the engine", "Connect Windows to it", "Run a test container"]);
+        s.tasks = tasks(&[tr("Start the engine"), tr("Connect Windows to it"), tr("Run a test container")]);
     });
     task(0, "active", "");
     let t0 = Instant::now();
@@ -617,9 +618,9 @@ fn engine() -> io::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(200));
     }
-    task(0, "done", &format!("answered in {} ms", t0.elapsed().as_millis()));
+    task(0, "done", &trf("answered in {ms} ms", &[("ms", &t0.elapsed().as_millis())]));
     task(1, "done", r"\\.\pipe\kiri");
-    task(2, "active", "pulling alpine");
+    task(2, "active", &tr("pulling alpine"));
     log_line("$ docker run --rm alpine echo hello");
     // Before the installed copy exists, this runs the bundle's docker.exe:
     // check it first, as the tools step does for the copy it installs.
@@ -643,7 +644,7 @@ fn tools() -> io::Result<()> {
     update(|s| {
         s.step = "tools";
         s.progress = None;
-        s.tasks = tasks(&["docker 29.9.2", "Compose v5.6.1", "buildx v0.38.1", "docker build on Kiri", "Make Kiri the default"]);
+        s.tasks = tasks(&["docker 29.9.2".to_owned(), "Compose v5.6.1".to_owned(), "buildx v0.38.1".to_owned(), tr("docker build on Kiri"), tr("Make Kiri the default")]);
     });
     task(0, "active", "");
     for f in ["bin/docker.exe", "bin/kiri.exe", "bin/cli-plugins/docker-compose.exe", "bin/cli-plugins/docker-buildx.exe"] {
@@ -678,8 +679,8 @@ fn tools() -> io::Result<()> {
     for line in io::BufRead::lines(io::BufReader::new(stdout)).map_while(Result::ok) {
         let line = line.trim();
         if let Some(n) = line.strip_prefix("TASK ").and_then(|n| n.parse::<usize>().ok()) {
-            let detail = if n == 4 && !make_default { "skipped" } else { "" };
-            task(n, "done", detail);
+            let detail = if n == 4 && !make_default { tr("skipped") } else { String::new() };
+            task(n, "done", &detail);
             task(n + 1, "active", "");
         } else if let Some(why) = line.strip_prefix("ERROR ") {
             error = Some(why.trim().to_owned());
