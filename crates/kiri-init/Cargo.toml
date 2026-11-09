@@ -12,6 +12,7 @@ kiri-proto = { path = "../kiri-proto" }
 [target.'cfg(target_os = "linux")'.dependencies]
 flate2 = "1"
 libc = "0.2"
+serde_json = "1"
 ruzstd = "0.9"
 tar = "0.4"
 

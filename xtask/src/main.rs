@@ -304,7 +304,7 @@ fn linux_build(root: &Path, amd64: bool) -> io::Result<()> {
         "rust:1-alpine",
         "sh",
         "-c",
-        "apk add -q musl-dev && cargo build --release -p kiri -p kiri-init",
+        "apk add -q musl-dev libseccomp-dev libseccomp-static && cargo build --release -p kiri -p kiri-init",
     ]))?;
     for b in ["kiri", "kiri-init"] {
         let p = root.join("target").join(out).join("release").join(b);

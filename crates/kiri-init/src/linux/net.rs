@@ -66,19 +66,36 @@ impl Ip6 {
 
 /// How a container is plugged into one network, from its settings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Plug {
+pub struct Plug<'a> {
+    pub driver: &'a str,
+    pub parent: &'a str,
+    pub mode: &'a str,
+    pub ipvlan_flag: &'a str,
+    pub mtu: u32,
+    pub opts: kiri_proto::StrList<'a>,
     /// `--internal`: no default route.
     pub internal: bool,
     /// IPv6-only: no IPv4 address on the container or the bridge.
     pub no_ipv4: bool,
 }
 
-impl Plug {
-    pub fn from_opts(opts: kiri_proto::StrList<'_>) -> Plug {
+impl<'a> Plug<'a> {
+    pub fn from_opts(opts: kiri_proto::StrList<'a>) -> Plug<'a> {
         use kiri_proto::net_opts as k;
-        Plug { internal: k::values(opts, k::INTERNAL).next().is_some(), no_ipv4: k::values(opts, k::NO_IPV4).next().is_some() }
+        let get = |key| k::values(opts, key).next().unwrap_or_default();
+        Plug { opts, driver: get("driver"), parent: get("parent"), mode: get("mode"), ipvlan_flag: get("ipvlan_flag"), mtu: get("mtu").parse().unwrap_or(CONTAINER_MTU), internal: k::values(opts, k::INTERNAL).next().is_some(), no_ipv4: k::values(opts, k::NO_IPV4).next().is_some() }
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Policy { pub icc: bool, pub masq: bool, pub mode4: u8, pub mode6: u8 }
+impl Default for Policy { fn default() -> Self { Self { icc: true, masq: true, mode4: 0, mode6: 0 } } }
+static POLICIES: std::sync::Mutex<std::collections::BTreeMap<String, Policy>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+pub fn policy(name: &str) -> Policy { POLICIES.lock().unwrap_or_else(|e| e.into_inner()).get(name).copied().unwrap_or_default() }
+#[derive(Clone)]
+pub struct RoutedPort { pub bridge: String, pub ip: [u8; 4], pub ip6: Option<[u8; 16]>, pub port: u16, pub udp: bool, pub ipv6: bool }
+static ROUTED_PORTS: std::sync::Mutex<std::collections::BTreeMap<String, Vec<RoutedPort>>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+pub fn routed_ports() -> Vec<RoutedPort> { ROUTED_PORTS.lock().unwrap_or_else(|e| e.into_inner()).values().flatten().cloned().collect() }
 
 pub fn ip6_str(a: [u8; 16]) -> String {
     std::net::Ipv6Addr::from(a).to_string()
@@ -528,6 +545,8 @@ impl Bridges {
     /// A removed network's bridge: deleting it takes its addresses and
     /// routes along; the IPv6 NAT rule for it goes too.
     pub fn remove(&mut self, name: &str) {
+        POLICIES.lock().unwrap_or_else(|e| e.into_inner()).remove(name);
+        ROUTED_PORTS.lock().unwrap_or_else(|e| e.into_inner()).retain(|_, ports| !ports.iter().any(|p| p.bridge == name));
         if let Ok(mut nl) = Netlink::open(libc::NETLINK_ROUTE) {
             let _ = netlink::delete_link(&mut nl, name);
         }
@@ -658,15 +677,49 @@ pub fn attach_container(
 /// MAC is made from it): neither the interface nor the bridge gets it.
 #[allow(clippy::too_many_arguments)]
 pub fn attach(bridges: &mut Bridges, bridge: &str, host_ifname: &str, pid: libc::pid_t, n: u32, ip: [u8; 4], prefix: u8, gateway: [u8; 4], mac: Option<[u8; 6]>, v6: Option<Ip6>, plug: Plug) -> io::Result<()> {
-    let Plug { internal, no_ipv4 } = plug;
+    let Plug { internal, no_ipv4, .. } = plug;
     let mac = Some(mac.unwrap_or_else(|| mac_for(ip)));
-    let bridge_index = bridges.ensure(bridge, (!no_ipv4).then_some(gateway), prefix, v6)?;
+    let direct = matches!(plug.driver, "macvlan" | "ipvlan");
+    let get = |key| kiri_proto::net_opts::values(plug.opts, key).next().unwrap_or_default();
+    let mode = |value| match value { "routed" => 1, "nat-unprotected" => 2, "isolated" => 3, _ => 0 };
+    let policy = Policy { icc: get("icc") != "false", masq: get("masq") != "false", mode4: mode(get("gwmode4")), mode6: mode(get("gwmode6")) };
+    if !direct && policy != Policy::default() {
+        let mut policies = POLICIES.lock().unwrap_or_else(|e| e.into_inner());
+        if policies.get(bridge).copied() != Some(policy) { policies.insert(bridge.to_owned(), policy); }
+    }
+    let published: Vec<_> = kiri_proto::net_opts::values(plug.opts, "published").filter_map(|s| {
+        let mut parts = s.split('/');
+        let port = parts.next()?.parse().ok()?;
+        let proto = parts.next()?;
+        let ipv6 = parts.next()? == "6";
+        Some(RoutedPort { bridge: bridge.to_owned(), ip, ip6: v6.map(|v| v.ip), port, udp: proto == "udp", ipv6 })
+    }).collect();
+    let has_published = !published.is_empty();
+    if has_published { ROUTED_PORTS.lock().unwrap_or_else(|e| e.into_inner()).insert(host_ifname.to_owned(), published); }
+    let bridge_index = if direct { 0 } else { bridges.ensure(bridge, (!no_ipv4 && policy.mode4 != 3).then_some(gateway), prefix, v6.filter(|_| policy.mode6 != 3))? };
     let netns = std::fs::File::open(format!("/proc/{pid}/ns/net"))?;
     let mut host = Netlink::open(libc::NETLINK_ROUTE)?;
     // A stopped container's veth may still hold this address and MAC.
     delete_retired(&mut host);
     let ifname = format!("eth{n}");
-    netlink::create_veth(&mut host, host_ifname, bridge_index, &netns, CONTAINER_MTU, &ifname, mac)?;
+    if direct {
+        let parent = if plug.parent.is_empty() {
+            netlink::create_dummy(&mut host, bridge)?;
+            netlink::set_up(&mut host, netlink::index_of(bridge)?)?;
+            let mut made = MADE_BRIDGES.lock().unwrap_or_else(|e| e.into_inner());
+            if !made.iter().any(|n| n == bridge) { made.push(bridge.to_owned()); }
+            bridge
+        } else { plug.parent };
+        netlink::create_direct(&mut host, parent, &netns, &ifname, plug, mac)?;
+    } else {
+        if plug.mtu != CONTAINER_MTU { netlink::set_mtu(&mut host, bridge_index, plug.mtu)?; }
+        netlink::create_veth(&mut host, host_ifname, bridge_index, &netns, plug.mtu, &ifname, mac)?;
+        if !policy.icc { sys::write_file(&format!("/sys/class/net/{host_ifname}/brport/isolated"), "1")?; }
+        if policy.mode4 == 1 || policy.mode6 == 1 {
+            refresh_nat()?;
+            if v6.is_some() { bridges.update_v6(None)?; }
+        }
+    }
     // By name: a new namespace may have tunl0, gre0 … before it.
     let index = netlink::index_in(&netns, &ifname)?;
     if v6.is_none() {
@@ -683,10 +736,13 @@ pub fn attach(bridges: &mut Bridges, bridge: &str, host_ifname: &str, pid: libc:
         netlink::add_address6(&mut inner, index, v.ip, v.prefix)?;
     }
     netlink::set_up(&mut inner, index)?;
-    if n == 0 && !internal && !no_ipv4 {
+    let l3 = plug.driver == "ipvlan" && matches!(plug.mode, "l3" | "l3s");
+    if n == 0 && !internal && !no_ipv4 && l3 { netlink::add_link_default(&mut inner, index, false)?; }
+    if v6.is_some() && !internal && l3 { netlink::add_link_default(&mut inner, index, true)?; }
+    if n == 0 && !internal && !no_ipv4 && !l3 {
         netlink::add_default_route(&mut inner, index, gateway)?;
     }
-    if let Some(v) = v6.filter(|_| !internal) {
+    if let Some(v) = v6.filter(|_| !internal && !l3) {
         netlink::add_default_route6(&mut inner, index, v.gateway)?;
     }
     Ok(())
@@ -704,6 +760,9 @@ static RETIRED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new()
 /// to the old namespace, and that answered with resets (a download that
 /// broke mid-TLS or stalled).
 pub fn retire(veths: &[String]) {
+    let mut ports = ROUTED_PORTS.lock().unwrap_or_else(|e| e.into_inner());
+    for v in veths { ports.remove(v); }
+    drop(ports);
     RETIRED.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(veths);
 }
 
@@ -715,10 +774,21 @@ fn delete_retired(nl: &mut Netlink) {
     }
 }
 
-/// Unplugs a container's extra network by its host-side veth.
+/// Deletes an orphaned host-side veth during cleanup.
 pub fn detach(host_ifname: &str) -> io::Result<()> {
+    ROUTED_PORTS.lock().unwrap_or_else(|e| e.into_inner()).remove(host_ifname);
     let mut host = Netlink::open(libc::NETLINK_ROUTE)?;
     netlink::delete_link(&mut host, host_ifname)
+}
+
+/// Removes published-port rules after an endpoint has been unplugged.
+pub fn forget_endpoint(bridges: &mut Bridges, host_ifname: &str) -> io::Result<()> {
+    let removed = ROUTED_PORTS.lock().unwrap_or_else(|e| e.into_inner()).remove(host_ifname);
+    if removed.is_some() {
+        refresh_nat()?;
+        bridges.update_v6(None)?;
+    }
+    Ok(())
 }
 
 /// The LISTEN lines of a process's network namespace, IPv4 and IPv6, as the

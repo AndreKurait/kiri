@@ -5,6 +5,7 @@
 #[cfg(target_os = "linux")]
 pub mod access;
 mod api;
+mod detach;
 mod binds;
 mod builder;
 pub mod dns;
@@ -31,6 +32,7 @@ mod usb;
 mod vmcpu;
 mod vmlink;
 mod volumes;
+mod websocket;
 
 use std::io;
 use std::os::unix::fs::PermissionsExt;

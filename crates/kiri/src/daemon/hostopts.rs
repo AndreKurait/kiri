@@ -7,7 +7,7 @@
 use serde_json::{Value, json};
 
 /// The HostConfig keys kept with a container.
-const KEYS: [&str; 5] = ["Ulimits", "Sysctls", "Devices", "DeviceCgroupRules", "GroupAdd"];
+const KEYS: [&str; 10] = ["Ulimits", "Sysctls", "Devices", "DeviceCgroupRules", "GroupAdd", "PidMode", "IpcMode", "UTSMode", "UsernsMode", "CgroupnsMode"];
 
 /// `nofile` when the run sets none: what containers get on Docker Desktop
 /// and on Docker Engine under containerd's `LimitNOFILE=infinity`. Without
@@ -75,6 +75,18 @@ pub fn check_device_requests(host: &Value) -> Result<(), String> {
 /// VM's) network namespace, so `net.*` sysctls are not its own.
 pub fn guest_lines(opts: &Value, net_host: bool) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
+    for (key, kind) in [("PidMode", "pid"), ("IpcMode", "ipc"), ("UTSMode", "uts"), ("UsernsMode", "user"), ("CgroupnsMode", "cgroup")] {
+        if opts[key].is_null() { continue; }
+        let value = opts[key].as_str().ok_or_else(|| format!("{key} must be a string"))?;
+        let valid = match kind {
+            "pid" => matches!(value, "" | "host" | "private") || value.strip_prefix("container:").is_some_and(|t| !t.is_empty() && !t.contains(['\t', '\n'])),
+            "ipc" => matches!(value, "" | "host" | "private" | "shareable" | "none") || value.strip_prefix("container:").is_some_and(|t| !t.is_empty() && !t.contains(['\t', '\n'])),
+            "user" => matches!(value, "" | "host"),
+            _ => matches!(value, "" | "host" | "private"),
+        };
+        if !valid { return Err(format!("invalid {key}: {value}")); }
+        if !value.is_empty() { out.push(format!("namespace\t{kind}\t{value}")); }
+    }
     let mut nofile = false;
     for u in opts["Ulimits"].as_array().into_iter().flatten() {
         let name = u["Name"].as_str().unwrap_or("");

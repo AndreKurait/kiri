@@ -32,10 +32,9 @@ pub const MAX_OUTPUT_CHUNK: usize = 64 * 1024;
 /// for a process that is not reading; the host blocks the client instead.
 pub const INPUT_WINDOW: usize = 4 << 20;
 
-/// The wire version. The host refuses an agent with another one: 3 added
-/// `InputConsumed`, which the host waits on, so an older agent would leave
-/// a client's stdin blocked after `INPUT_WINDOW` bytes.
-pub const PROTOCOL: u16 = 3;
+/// The wire version. Version 4 adds swap, reservation, and CPU/NUMA sets
+/// to resource limits. Both daemon and agent must be upgraded together.
+pub const PROTOCOL: u16 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Msg<'a> {
@@ -125,7 +124,7 @@ pub enum Msg<'a> {
     CopyStat { entry: FsEntry<'a>, link: &'a str },
     CopyDone,
     /// Host → guest: change a running container's limits. Answered by `Ack` or `Error`.
-    Update { id: &'a str, limits: Limits },
+    Update { id: &'a str, limits: Limits<'a> },
     /// Host → guest: freeze (pause) or thaw a container. Answered by `Ack` or `Error`.
     Freeze { id: &'a str, frozen: bool },
     /// Host → guest: a container's resource use. Answered by `ContainerStats` or `Error`.
@@ -432,7 +431,7 @@ pub struct RunSpec<'a> {
     /// Bind mounts, each `source\ttarget\tflags`: `source` is a path in the
     /// guest; `flags` is a comma list (`ro`).
     pub mounts: StrList<'a>,
-    pub limits: Limits,
+    pub limits: Limits<'a>,
     /// Capabilities to keep, one bit each; 0 means Docker's default set.
     pub caps: u64,
     /// HostConfig settings applied at start, one per line, tab-separated:
@@ -445,7 +444,7 @@ pub struct RunSpec<'a> {
 /// cgroup limits (`--memory`, `--cpus`, `--cpu-shares`, `--pids-limit`).
 /// Zero means no limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Limits {
+pub struct Limits<'a> {
     pub memory_max: u64,
     /// CPU time allowed per `cpu_period` microseconds (`--cpus 1.5` is 150000/100000).
     pub cpu_quota: u64,
@@ -455,6 +454,10 @@ pub struct Limits {
     pub pids_max: u32,
     /// `--shm-size` in bytes; 0 means 64 MiB.
     pub shm_size: u64,
+    pub memory_swap: i64,
+    pub memory_reservation: u64,
+    pub cpuset_cpus: &'a str,
+    pub cpuset_mems: &'a str,
 }
 
 fn put_limits(out: &mut Vec<u8>, l: &Limits) {
@@ -464,10 +467,14 @@ fn put_limits(out: &mut Vec<u8>, l: &Limits) {
     put_u32(out, l.cpu_weight);
     put_u32(out, l.pids_max);
     put_u64(out, l.shm_size);
+    put_u64(out, l.memory_swap as u64);
+    put_u64(out, l.memory_reservation);
+    put_str(out, l.cpuset_cpus);
+    put_str(out, l.cpuset_mems);
 }
 
-fn read_limits(r: &mut Reader<'_>) -> Result<Limits, DecodeError> {
-    Ok(Limits { memory_max: r.u64()?, cpu_quota: r.u64()?, cpu_period: r.u32()?, cpu_weight: r.u32()?, pids_max: r.u32()?, shm_size: r.u64()? })
+fn read_limits<'a>(r: &mut Reader<'a>) -> Result<Limits<'a>, DecodeError> {
+    Ok(Limits { memory_max: r.u64()?, cpu_quota: r.u64()?, cpu_period: r.u32()?, cpu_weight: r.u32()?, pids_max: r.u32()?, shm_size: r.u64()?, memory_swap: r.u64()? as i64, memory_reservation: r.u64()?, cpuset_cpus: r.str()?, cpuset_mems: r.str()? })
 }
 
 /// One container's resource use, read from its cgroup and network namespace.
@@ -1304,7 +1311,7 @@ mod tests {
     fn run_spec_lists_survive_encoding() {
         let mut buf = Vec::new();
         let net = Net { bridge: "kiri0", ip: [172, 17, 0, 2], prefix: 16, gateway: [172, 17, 0, 1], extra_hosts: &["1.2.3.4 x"], dns_names: &["web"], opts: &["netns=c0", "nameserver=8.8.8.8"] };
-        let limits = Limits { memory_max: 256 << 20, cpu_quota: 150_000, cpu_period: 100_000, cpu_weight: 100, pids_max: 64, shm_size: 1 << 20 };
+        let limits = Limits { memory_max: 256 << 20, cpu_quota: 150_000, cpu_period: 100_000, cpu_weight: 100, pids_max: 64, shm_size: 1 << 20, ..Limits::default() };
         encode_run(&mut buf, "c1", &["sha256:top", "sha256:base"], &["echo", "hi"], &["A=1"], "/", "", "c1", 3, net, &["/a\t/b\tro"], &limits, 0b101, &["rlimit\t7\t1024\t2048"]);
         let Msg::Run(r) = decode(&buf).unwrap() else { panic!() };
         assert_eq!(r.id, "c1");
@@ -1364,7 +1371,7 @@ mod tests {
         round(Msg::RemoveBridge { bridge: "kiri3" });
         round(Msg::CopyStat { entry: FsEntry { name: "hosts", mode: 0o100644, size: 9, mtime: 3, mtime_nsec: 4, ino: 5 }, link: "" });
         round(Msg::CopyDone);
-        round(Msg::Update { id: "c1", limits: Limits { memory_max: 1, cpu_quota: 2, cpu_period: 3, cpu_weight: 4, pids_max: 5, shm_size: 6 } });
+        round(Msg::Update { id: "c1", limits: Limits { memory_max: 1, cpu_quota: 2, cpu_period: 3, cpu_weight: 4, pids_max: 5, shm_size: 6, memory_swap: -1, memory_reservation: 7, cpuset_cpus: "0-3", cpuset_mems: "0" } });
         round(Msg::Freeze { id: "c1", frozen: true });
         round(Msg::StatsQuery { id: "c1" });
         round(Msg::ContainerStats(ContainerStats { read_ns: 1, mem_current: 2, online_cpus: 4, rx_bytes: 9, io_write_bytes: 11, ..Default::default() }));

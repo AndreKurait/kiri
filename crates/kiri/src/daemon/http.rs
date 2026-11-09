@@ -7,7 +7,8 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 
 /// API version this daemon speaks. The Docker CLI negotiates down to it.
-pub const API_VERSION: &str = "1.47";
+pub const API_VERSION: &str = "1.48";
+pub const MIN_API_VERSION: &str = "1.24";
 
 /// Largest request body read into memory (container create, etc.). Archives
 /// and image loads are streamed with [`Body`] instead, at any size.
@@ -21,6 +22,7 @@ pub struct Request {
     pub method: String,
     /// Path without the `/v1.xx` prefix or the query string.
     pub path: String,
+    pub api_version: Option<String>,
     query: Vec<(String, String)>,
     headers: Vec<(String, String)>,
     pub body: Vec<u8>,
@@ -49,7 +51,19 @@ impl Request {
     /// container create), so it goes through the same code as a client's.
     pub fn internal(method: &str, path: &str, query: &[(&str, &str)], body: Vec<u8>) -> Request {
         let query = query.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
-        Request { method: method.to_owned(), path: path.to_owned(), query, headers: Vec::new(), body }
+        Request { method: method.to_owned(), path: path.to_owned(), api_version: None, query, headers: Vec::new(), body }
+    }
+
+    pub fn version_error(&self) -> Option<String> {
+        let version = self.api_version.as_deref()?;
+        let requested = parse_version(version)?;
+        if requested > parse_version(API_VERSION)? {
+            Some(format!("client version {version} is too new. Maximum supported API version is {API_VERSION}"))
+        } else if requested < parse_version(MIN_API_VERSION)? {
+            Some(format!("client version {version} is too old. Minimum supported API version is {MIN_API_VERSION}, please upgrade your client to a newer version"))
+        } else {
+            None
+        }
     }
 }
 
@@ -59,7 +73,7 @@ impl Request {
 pub fn read_request(r: &mut BufReader<UnixStream>, stream: impl Fn(&str, &str) -> bool) -> io::Result<Option<Request>> {
     // The request line and headers are read through a cap, so a client
     // cannot exhaust memory with an endless line. The body is read after.
-    let (method, path, query, headers) = {
+    let (method, path, api_version, query, headers) = {
         let mut head = (&mut *r).take(MAX_HEAD);
         let mut line = String::new();
         if head.read_line(&mut line)? == 0 {
@@ -71,7 +85,10 @@ pub fn read_request(r: &mut BufReader<UnixStream>, stream: impl Fn(&str, &str) -
         };
         let method = method.to_owned();
         let (raw_path, raw_query) = target.split_once('?').unwrap_or((target, ""));
-        let path = strip_version(raw_path).to_owned();
+        let path = strip_version(raw_path);
+        let api_version = (path != raw_path).then(|| raw_path[2..raw_path.len() - path.len()].to_owned());
+        // URL paths preserve literal '+', unlike form-encoded queries.
+        let path = percent_decode(&path.replace('+', "%2B"));
         let query: Vec<(String, String)> = raw_query
             .split('&')
             .filter(|kv| !kv.is_empty())
@@ -94,42 +111,45 @@ pub fn read_request(r: &mut BufReader<UnixStream>, stream: impl Fn(&str, &str) -
                 headers.push((k.trim().to_owned(), v.trim().to_owned()));
             }
         }
-        (method, path, query, headers)
+        (method, path, api_version, query, headers)
     };
     let streamed = stream(&method, &path);
-    let mut req = Request { method, path, query, headers, body: Vec::new() };
+    let mut req = Request { method, path, api_version, query, headers, body: Vec::new() };
+    validate_framing(&req)?;
+    if req.header("expect").is_some_and(|v| v.eq_ignore_ascii_case("100-continue")) {
+        r.get_mut().write_all(b"HTTP/1.1 100 Continue\r\n\r\n")?;
+        r.get_mut().flush()?;
+    }
     if streamed {
         return Ok(Some(req));
     }
-    if req.header("transfer-encoding").is_some_and(|v| v.eq_ignore_ascii_case("chunked")) {
-        let mut line = String::new();
-        loop {
-            line.clear();
-            // A chunk-size line is short hex (plus an optional ;extension).
-            (&mut *r).take(64).read_line(&mut line)?;
-            let size = line.trim().split(';').next().unwrap_or("");
-            let n = usize::from_str_radix(size, 16)
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad chunk size"))?;
-            if n > MAX_BODY || req.body.len().checked_add(n).is_none_or(|t| t > MAX_BODY) {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "request body too large"));
-            }
-            let start = req.body.len();
-            req.body.resize(start + n, 0);
-            r.read_exact(&mut req.body[start..])?;
-            let mut crlf = [0u8; 2];
-            r.read_exact(&mut crlf)?;
-            if n == 0 {
-                break;
-            }
-        }
-    } else if let Some(len) = req.header("content-length").and_then(|v| v.parse::<usize>().ok()) {
-        if len > MAX_BODY {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "request body too large"));
-        }
-        req.body.resize(len, 0);
-        r.read_exact(&mut req.body)?;
+    if req.header("content-length").and_then(|v| v.parse::<u64>().ok()).is_some_and(|n| n > MAX_BODY as u64) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "request body too large"));
     }
+    let mut body = Vec::new();
+    Body::new(&req, r).take(MAX_BODY as u64 + 1).read_to_end(&mut body)?;
+    if body.len() > MAX_BODY {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "request body too large"));
+    }
+    req.body = body;
     Ok(Some(req))
+}
+
+fn validate_framing(req: &Request) -> io::Result<()> {
+    let lengths: Vec<_> = req.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("content-length")).collect();
+    let encodings: Vec<_> = req.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case("transfer-encoding")).collect();
+    if lengths.len() > 1 || encodings.len() > 1 || (!lengths.is_empty() && !encodings.is_empty()) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "ambiguous request framing"));
+    }
+    if let Some(value) = req.header("content-length") {
+        if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) || value.parse::<u64>().is_err() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid content-length"));
+        }
+    }
+    if req.header("transfer-encoding").is_some_and(|v| !v.eq_ignore_ascii_case("chunked")) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "unsupported transfer-encoding"));
+    }
+    Ok(())
 }
 
 /// A streamed request body: Content-Length or chunked, read as it arrives.
@@ -156,15 +176,23 @@ impl Read for Body<'_> {
         }
         if self.chunked && self.left == 0 {
             let mut line = String::new();
-            self.r.read_line(&mut line)?;
+            (&mut *self.r).take(MAX_HEAD).read_line(&mut line)?;
+            if !line.ends_with("\r\n") {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid chunk-size line"));
+            }
             // A chunk size may carry extensions after a semicolon.
             let size = line.trim().split(';').next().unwrap_or("");
             self.left = u64::from_str_radix(size, 16).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "bad chunk size"))?;
             if self.left == 0 {
                 // Trailers, then the blank line.
+                let mut trailers = (&mut *self.r).take(MAX_HEAD);
                 loop {
                     line.clear();
-                    if self.r.read_line(&mut line)? == 0 || line.trim().is_empty() {
+                    trailers.read_line(&mut line)?;
+                    if !line.ends_with("\r\n") {
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "trailers too large or cut short"));
+                    }
+                    if line == "\r\n" {
                         break;
                     }
                 }
@@ -182,6 +210,9 @@ impl Read for Body<'_> {
             if self.chunked {
                 let mut crlf = [0u8; 2];
                 self.r.read_exact(&mut crlf)?;
+                if crlf != *b"\r\n" {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid chunk terminator"));
+                }
             } else {
                 self.done = true;
             }
@@ -194,10 +225,18 @@ impl Read for Body<'_> {
 fn strip_version(path: &str) -> &str {
     if let Some(rest) = path.strip_prefix("/v")
         && let Some(i) = rest.find('/')
-            && rest[..i].bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+            && parse_version(&rest[..i]).is_some() {
                 return &rest[i..];
             }
     path
+}
+
+fn parse_version(version: &str) -> Option<(u32, u32)> {
+    let (major, minor) = version.split_once('.')?;
+    if major.is_empty() || minor.is_empty() || !major.bytes().chain(minor.bytes()).all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((major.parse().ok()?, minor.parse().ok()?))
 }
 
 fn percent_decode(s: &str) -> String {
@@ -227,6 +266,8 @@ fn reason(status: u16) -> &'static str {
         204 => "No Content",
         304 => "Not Modified",
         400 => "Bad Request",
+        401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
         500 => "Internal Server Error",
@@ -368,5 +409,84 @@ mod tests {
         assert_eq!(percent_decode("a+b"), "a b");
         assert_eq!(percent_decode("100%"), "100%");
         assert_eq!(percent_decode("%7B%22a%22%3A1%7D"), "{\"a\":1}");
+    }
+
+    fn input(bytes: &[u8]) -> BufReader<UnixStream> {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.write_all(bytes).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        BufReader::new(server)
+    }
+
+    #[test]
+    fn chunked_trailers_preserve_next_request() {
+        let mut r = input(b"POST /auth HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n2;ext=yes\r\n{}\r\n0\r\nX-Checksum: abc\r\n\r\nGET /_ping HTTP/1.1\r\n\r\n");
+        let req = read_request(&mut r, |_, _| false).unwrap().unwrap();
+        assert_eq!(req.body, b"{}");
+        assert_eq!(read_request(&mut r, |_, _| false).unwrap().unwrap().path, "/_ping");
+    }
+
+    #[test]
+    fn streamed_trailers_preserve_next_request() {
+        let mut r = input(b"POST /images/load HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\nChecksum: xyz\r\n\r\nGET /_ping HTTP/1.1\r\n\r\n");
+        let req = read_request(&mut r, |_, _| true).unwrap().unwrap();
+        let mut data = Vec::new();
+        Body::new(&req, &mut r).read_to_end(&mut data).unwrap();
+        assert_eq!(data, b"abc");
+        assert_eq!(read_request(&mut r, |_, _| false).unwrap().unwrap().path, "/_ping");
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_invalid_framing() {
+        for headers in [
+            "Content-Length: 0\r\nTransfer-Encoding: chunked",
+            "Content-Length: 0\r\nContent-Length: 2",
+            "Content-Length: -1",
+            "Content-Length: xyz",
+            "Content-Length: +2",
+            "Transfer-Encoding: gzip",
+            "Transfer-Encoding: chunked\r\nTransfer-Encoding: chunked",
+        ] {
+            let mut r = input(format!("POST /auth HTTP/1.1\r\n{headers}\r\n\r\n").as_bytes());
+            assert_eq!(read_request(&mut r, |_, _| false).unwrap_err().kind(), io::ErrorKind::InvalidData, "{headers}");
+        }
+    }
+
+    #[test]
+    fn rejects_broken_chunks() {
+        for body in ["1\r\nxXX0\r\n\r\n", "0\r\nX: y\r\n", "1\nx\r\n0\r\n\r\n"] {
+            let mut r = input(format!("POST /auth HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n{body}").as_bytes());
+            assert!(read_request(&mut r, |_, _| false).is_err(), "{body:?}");
+        }
+    }
+
+    #[test]
+    fn api_version_and_encoded_image_path() {
+        let mut r = input(b"GET /v1.47/images/org%2Fimage:tag+suffix/json?name=a+b HTTP/1.1\r\n\r\n");
+        let req = read_request(&mut r, |_, _| false).unwrap().unwrap();
+        assert_eq!(req.path, "/images/org/image:tag+suffix/json");
+        assert_eq!(req.query("name"), Some("a b"));
+        assert_eq!(req.api_version.as_deref(), Some("1.47"));
+        assert!(req.version_error().is_none());
+        for version in ["1.23", "1.49", "2.0"] {
+            let mut r = input(format!("GET /v{version}/info HTTP/1.1\r\n\r\n").as_bytes());
+            assert!(read_request(&mut r, |_, _| false).unwrap().unwrap().version_error().is_some());
+        }
+        for path in ["/v/info", "/v1/info", "/v1..47/info"] {
+            assert_eq!(strip_version(path), path);
+        }
+    }
+
+    #[test]
+    fn expect_continue_unblocks_upload() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        client.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+        let worker = std::thread::spawn(move || read_request(&mut BufReader::new(server), |_, _| false).unwrap().unwrap().body);
+        client.write_all(b"POST /auth HTTP/1.1\r\nContent-Length: 2\r\nExpect: 100-continue\r\n\r\n").unwrap();
+        let mut interim = [0; 25];
+        client.read_exact(&mut interim).unwrap();
+        assert_eq!(&interim, b"HTTP/1.1 100 Continue\r\n\r\n");
+        client.write_all(b"{}").unwrap();
+        assert_eq!(worker.join().unwrap(), b"{}");
     }
 }

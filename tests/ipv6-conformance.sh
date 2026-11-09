@@ -28,7 +28,7 @@
 #                         (default: 1 when the engine is a local socket)
 #   V6C_KEEP=1            leave the objects for a look (cleanup prints how)
 #   V6C_PORT_BASE=18640   first of the 4 host ports the port cases publish
-set -u
+set -uo pipefail
 
 # The CLI and the engine. A Windows docker.exe run from WSL doesn't see
 # Linux environment variables, so the engine is passed as flags.
@@ -110,16 +110,16 @@ report() { # report RESULT NAME SOURCE [DETAIL]
 # has NAME SOURCE WANT CMD... : PASS when the output contains WANT.
 has() {
   local name=$1 src=$2 want=$3; shift 3
-  local got; got=$(out "$@")
-  if [[ "$got" == *"$want"* ]]; then report PASS "$name" "$src"
-  else report FAIL "$name" "$src" "want: $want | got: $(echo "$got" | head -3 | tr '\n' ' ')"; fi
+  local got rc; got=$(out "$@"); rc=$?
+  if [ "$rc" = 0 ] && [[ "$got" == *"$want"* ]]; then report PASS "$name" "$src"
+  else report FAIL "$name" "$src" "exit: $rc | want: $want | got: $(echo "$got" | head -3 | tr '\n' ' ')"; fi
 }
 # lacks NAME SOURCE UNWANTED CMD... : PASS when the command succeeds and its output doesn't contain UNWANTED.
 lacks() {
   local name=$1 src=$2 bad=$3; shift 3
-  local got rc; got=$(out "$@"); rc=${PIPESTATUS[0]}
-  if [[ "$got" != *"$bad"* ]]; then report PASS "$name" "$src"
-  else report FAIL "$name" "$src" "unwanted: $bad | got: $(echo "$got" | head -3 | tr '\n' ' ')"; fi
+  local got rc; got=$(out "$@"); rc=$?
+  if [ "$rc" = 0 ] && [[ "$got" != *"$bad"* ]]; then report PASS "$name" "$src"
+  else report FAIL "$name" "$src" "exit: $rc | unwanted: $bad | got: $(echo "$got" | head -3 | tr '\n' ' ')"; fi
 }
 # refused NAME SOURCE CMD... : PASS when the command fails (exit != 0).
 refused() {
@@ -222,7 +222,8 @@ else report FAIL ula-distinct-subnets "$DOC_V6#dynamic-ipv6-subnet-allocation" "
 # A given subnet; the gateway defaults to its first address.
 net --ipv6 --subnet "${S1}/64" "$N-sub" >/dev/null
 has user-subnet "$DOC_CREATE" "${S1}/64" d network inspect "$N-sub" -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}'
-has default-gateway-first "$DOC_BRIDGE" "${S1}1" d network inspect "$N-sub" -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}'
+# Check the runtime endpoint's gateway below. Docker 28's IPAM.Config retains
+# the user-supplied configuration and omits an automatically chosen gateway.
 lacks gateway-no-cidr-suffix "$M_BR TestNetworkInspectGateway" "/" d network inspect "$N-sub" -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}'
 has explicit-gateway "$DOC_CREATE" "${S2}fe" sh -c "$(printf '%q ' "${D[@]}") network create --label $LABEL --ipv6 --subnet ${S2}/64 --gateway ${S2}fe $N-gw >/dev/null && $(printf '%q ' "${D[@]}") network inspect $N-gw -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}'"
 refused subnet-overlap-refused "$DOC_CREATE" net --ipv6 --subnet "${S1}/80" "$N-dup"
@@ -235,6 +236,7 @@ WEB6=$(v6of "$N-web" "$N-sub")
 case "$WEB6" in ${S1}*) report PASS container-gets-v6 "$DOC_V6#create-an-ipv6-network" ;;
   *) report FAIL container-gets-v6 "$DOC_V6#create-an-ipv6-network" "GlobalIPv6Address=$WEB6" ;; esac
 has prefix-len-64 "$DOC_V6" "64" d inspect -f "{{(index .NetworkSettings.Networks \"$N-sub\").GlobalIPv6PrefixLen}}" "$N-web"
+has default-gateway-first "$DOC_BRIDGE" "${S1}1" d inspect "$N-web" -f "{{(index .NetworkSettings.Networks \"$N-sub\").IPv6Gateway}}"
 has ipv6-gateway-field "$DOC_V6" "${S1}1" d inspect -f "{{(index .NetworkSettings.Networks \"$N-sub\").IPv6Gateway}}" "$N-web"
 has ipv4-too "$DOC_V6 (dual stack)" "." d inspect -f "{{(index .NetworkSettings.Networks \"$N-sub\").IPAddress}}" "$N-web"
 has network-lists-member "$DOC_V6" "$WEB6/64" d network inspect "$N-sub" -f '{{range .Containers}}{{.IPv6Address}} {{end}}'
@@ -247,8 +249,8 @@ has resolv-embedded-dns "$M_RESOLV TestResolvConfLocalhostIPv6" "nameserver 127.
 has icc-ping6-ip "$M_BR TestBridgeICC" "1 packets received" run --rm --network "$N-sub" $IMG ping -6 -c 1 -W 3 "$WEB6"
 has icc-ping6-name "$M_BR TestBridgeICC" "1 packets received" run --rm --network "$N-sub" $IMG ping -6 -c 1 -W 3 "$N-web"
 has icc-http-v6 "$M_BR TestBridgeICC" "Welcome to nginx" run --rm --network "$N-sub" $IMG wget -qO- -T 5 "http://[$WEB6]/"
-has dns-aaaa "$M_BR TestBridgeICC / $DOC_DNS" "$WEB6" run --rm --network "$N-sub" $IMG nslookup -type=AAAA "$N-web"
-has dns-a-still "$DOC_DNS" "Address" run --rm --network "$N-sub" $IMG nslookup -type=A "$N-web"
+has dns-aaaa "$M_BR TestBridgeICC / $DOC_DNS" "$WEB6" run --rm --network "$N-sub" $IMG nslookup -type=AAAA "$N-web."
+has dns-a-still "$DOC_DNS" "Address" run --rm --network "$N-sub" $IMG nslookup -type=A "$N-web."
 # An address on a ULA (auto) network too.
 run -d --name "$N-ula-c" --network "$N-ula" $IMG sleep 300 >/dev/null
 U6=$(v6of "$N-ula-c" "$N-ula")
@@ -275,7 +277,10 @@ refused ip6-outside-subnet-refused "$DOC_CONNECT" run --rm --network "$N-sub" --
 refused ip6-on-v4-network-refused "$DOC_CONNECT" run --rm --network "$N-v4" --ip6 "${S1}98" $IMG true
 # Docker (#51569) lets --ip6 pick from an automatically allocated subnet.
 ULAPFX=${ULA%%::/64}
-has ip6-on-auto-subnet "$M_BR TestSetIPWithNoConfiguredSubnet" "${ULAPFX}::77" run --rm --network "$N-ula" --ip6 "${ULAPFX}::77" $IMG ip -6 addr show eth0
+case "$SV" in
+  28.*) report SKIP ip6-on-auto-subnet "$M_BR TestSetIPWithNoConfiguredSubnet" "Docker 28 requires user-configured subnets for static addresses; the cited test is newer." ;;
+  *) has ip6-on-auto-subnet "$M_BR TestSetIPWithNoConfiguredSubnet" "${ULAPFX}::77" run --rm --network "$N-ula" --ip6 "${ULAPFX}::77" $IMG ip -6 addr show eth0 ;;
+esac
 run -d --name "$N-late" $IMG sleep 300 >/dev/null
 ok connect-ip6 "$DOC_CONNECT" d network connect --ip6 "${S2}42" "$N-gw" "$N-late"
 has connect-ip6-inspect "$DOC_CONNECT" "${S2}42" d inspect -f "{{(index .NetworkSettings.Networks \"$N-gw\").GlobalIPv6Address}}" "$N-late"
@@ -402,7 +407,7 @@ EOF
   has compose-subnet "$DOC_COMPOSE" "${S4}/64" d network inspect "${N}_fixed" -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}'
   has compose-ipv6-address "$DOC_COMPOSE_SVC" "${S4}10" d inspect -f "{{(index .NetworkSettings.Networks \"${N}_fixed\").GlobalIPv6Address}}" "${N}-web-1"
   has compose-auto-ula "$DOC_COMPOSE (no ipam: engine pool)" "fd" d network inspect "${N}_auto" -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}'
-  has compose-dns-aaaa "$DOC_COMPOSE" "${S4}10" run --rm --network "${N}_fixed" $IMG nslookup -type=AAAA web
+  has compose-dns-aaaa "$DOC_COMPOSE" "${S4}10" run --rm --network "${N}_fixed" $IMG nslookup -type=AAAA web.
   ok compose-down "$DOC_COMPOSE" d compose -p "$N" -f "$CF" down -t 1
   lacks compose-network-gone "$DOC_COMPOSE" "${N}_fixed" d network ls --format '{{.Name}}'
   rm -rf "$COMPOSE_DIR"; COMPOSE_DIR=

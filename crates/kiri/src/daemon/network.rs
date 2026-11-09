@@ -341,6 +341,7 @@ fn builtin(name: &str, driver: &str, bridge: &str, subnet: [u8; 4], gateway: [u8
 /// What `POST /networks/create` asks for beyond the name.
 #[derive(Debug, Default)]
 pub struct Settings {
+    pub driver: String,
     pub labels: serde_json::Value,
     pub internal: bool,
     pub attachable: bool,
@@ -354,6 +355,43 @@ pub struct Settings {
     /// An IPv6 `IPAM.Config` entry; without one an IPv6 network gets a /64
     /// from the pool.
     pub ipam6: Option<Ipam6>,
+}
+
+pub fn validate_options(s: &Settings) -> Result<(), String> {
+    let driver = if s.driver.is_empty() { "bridge" } else { &s.driver };
+    if !matches!(driver, "bridge" | "macvlan" | "ipvlan") { return Err(format!("unsupported network driver {driver}")); }
+    let Some(options) = s.options.as_object() else {
+        return if s.options.is_null() { Ok(()) } else { Err("network Options must be an object".into()) };
+    };
+    for (key, value) in options {
+        let value = value.as_str().ok_or_else(|| format!("network option {key} must be a string"))?;
+        let valid = match key.as_str() {
+            "com.docker.network.driver.mtu" => value.parse::<u32>().is_ok_and(|m| (if s.ipv6 { 1280 } else { 68 }..=65535).contains(&m)),
+            "com.docker.network.bridge.enable_icc" | "com.docker.network.bridge.enable_ip_masquerade" => matches!(value, "true" | "false"),
+            "com.docker.network.bridge.host_binding_ipv4" => value.parse::<std::net::IpAddr>().is_ok(),
+            "com.docker.network.bridge.gateway_mode_ipv4" | "com.docker.network.bridge.gateway_mode_ipv6" => matches!(value, "nat" | "nat-unprotected" | "routed") || (value == "isolated" && s.internal),
+            "parent" => !value.is_empty() && value.len() < 16 && value.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)),
+            "macvlan_mode" => matches!(value, "bridge" | "private" | "vepa" | "passthru"),
+            "ipvlan_mode" => matches!(value, "l2" | "l3" | "l3s"),
+            "ipvlan_flag" => matches!(value, "bridge" | "private" | "vepa"),
+            _ => false,
+        };
+        if !valid { return Err(format!("unsupported or invalid network option {key}={value}")); }
+    }
+    Ok(())
+}
+
+/// Agent settings for one endpoint; only configured options add wire data.
+pub fn guest_options(n: &Network) -> Vec<String> {
+    let mut out = Vec::new();
+    if n.driver != "bridge" { out.push(format!("driver={}", n.driver)); }
+    for (key, wire) in [("parent", "parent"), ("macvlan_mode", "mode"), ("ipvlan_mode", "mode"), ("ipvlan_flag", "ipvlan_flag"),
+        ("com.docker.network.driver.mtu", "mtu"), ("com.docker.network.bridge.enable_icc", "icc"),
+        ("com.docker.network.bridge.enable_ip_masquerade", "masq"), ("com.docker.network.bridge.gateway_mode_ipv4", "gwmode4"),
+        ("com.docker.network.bridge.gateway_mode_ipv6", "gwmode6")] {
+        if let Some(value) = n.options[key].as_str() { out.push(format!("{wire}={value}")); }
+    }
+    out
 }
 
 /// One IPv6 `IPAM.Config` entry, checked.
@@ -596,6 +634,7 @@ impl Networks {
     }
 
     pub fn create(&mut self, name: &str, s: Settings) -> Result<Network, String> {
+        validate_options(&s)?;
         if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b)) {
             return Err(format!("invalid network name {name:?}"));
         }
@@ -659,7 +698,7 @@ impl Networks {
         let n = Network {
             id: super::engine::random_hex(32),
             name: name.into(),
-            driver: "bridge".into(),
+            driver: if s.driver.is_empty() { "bridge".into() } else { s.driver },
             bridge: format!("kiri{index}"),
             subnet: subnet.0,
             prefix: subnet.1,

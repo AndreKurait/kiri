@@ -147,6 +147,8 @@ pub struct Spec {
     #[serde(default)]
     pub open_stdin: bool,
     #[serde(default)]
+    pub stdin_once: bool,
+    #[serde(default)]
     pub restart: RestartPolicy,
     /// Initial terminal size (rows, cols), from `HostConfig.ConsoleSize`.
     #[serde(default)]
@@ -160,6 +162,8 @@ pub struct Spec {
     /// `-p` bindings.
     #[serde(default)]
     pub ports: Vec<super::ports::Binding>,
+    #[serde(default)]
+    pub routed_ports: Vec<super::ports::Binding>,
     /// TCP ports the image (or `--expose`) declares; picks the domain's port.
     #[serde(default)]
     pub exposed: Vec<u16>,
@@ -261,7 +265,7 @@ pub struct Link {
 }
 
 /// cgroup limits as saved with a container; see [`kiri_proto::Limits`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
     pub memory_max: u64,
     pub cpu_quota: u64,
@@ -270,10 +274,18 @@ pub struct Limits {
     pub pids_max: u32,
     #[serde(default)]
     pub shm_size: u64,
+    #[serde(default)]
+    pub memory_swap: i64,
+    #[serde(default)]
+    pub memory_reservation: u64,
+    #[serde(default)]
+    pub cpuset_cpus: String,
+    #[serde(default)]
+    pub cpuset_mems: String,
 }
 
 impl Limits {
-    pub fn wire(&self) -> kiri_proto::Limits {
+    pub fn wire(&self) -> kiri_proto::Limits<'_> {
         kiri_proto::Limits {
             memory_max: self.memory_max,
             cpu_quota: self.cpu_quota,
@@ -281,6 +293,10 @@ impl Limits {
             cpu_weight: self.cpu_weight,
             pids_max: self.pids_max,
             shm_size: self.shm_size,
+            memory_swap: self.memory_swap,
+            memory_reservation: self.memory_reservation,
+            cpuset_cpus: &self.cpuset_cpus,
+            cpuset_mems: &self.cpuset_mems,
         }
     }
 }
@@ -289,7 +305,17 @@ impl Spec {
     /// The guest's `opts` lines for a start or an exec. `net_host`: it runs
     /// in the VM's (or host's) network namespace.
     pub fn guest_opts(&self, net_host: bool) -> Result<Vec<String>, Error> {
-        super::hostopts::guest_lines(&self.host_opts, net_host).map_err(Error::BadRequest)
+        let mut opts = super::hostopts::guest_lines(&self.host_opts, net_host).map_err(Error::BadRequest)?;
+        for option in &self.security_opt {
+            if let Some(profile) = option.strip_prefix("seccomp=").or_else(|| option.strip_prefix("seccomp:")) {
+                if profile != "unconfined" {
+                    let value: serde_json::Value = serde_json::from_str(profile).map_err(|e| Error::BadRequest(format!("invalid seccomp profile: {e}")))?;
+                    if !value.is_object() { return Err(Error::BadRequest("seccomp profile must be an object".into())); }
+                    opts.push(format!("seccomp\t{value}"));
+                }
+            }
+        }
+        Ok(opts)
     }
 
     /// Whether `--sysctl net.ipv6.conf.{all,default,<ifname>}.disable_ipv6=1`
@@ -1537,7 +1563,7 @@ impl Engine {
                 flags |= run_flags::NET_HOST;
                 (String::new(), [0; 4], 0, [0; 4])
             }
-            Some("bridge") => {
+            Some("bridge" | "macvlan" | "ipvlan") => {
                 let n = net.as_ref().expect("matched");
                 let ip = match super::network::parse_ip(&spec.ipv4_address) {
                     Some(want) => self.lock_networks().reserve(&n.name, want).map(|()| want).map_err(Error::Conflict),
@@ -1628,6 +1654,8 @@ impl Engine {
         hosts.extend(links);
         let mut opts = net_opts(&spec, joined.as_deref(), &domainname);
         opts.extend(net6_opts);
+        opts.extend(spec.routed_ports.iter().map(|p| format!("published={}/{}/{}", p.container_port, p.proto, if p.host_ip.contains(':') { 6 } else { 4 })));
+        if let Some(n) = &net { opts.extend(super::network::guest_options(n)); }
         let net_args = kiri_proto::Net { bridge: &bridge, ip, prefix, gateway, extra_hosts: &hosts, dns_names: &dns_names, opts: &opts };
         // Joining a host-network container is the host's namespace too: its
         // net.* sysctls would change the whole VM (or Linux host).
@@ -2188,7 +2216,7 @@ impl Engine {
     /// Plugs a running container into one more network as `eth{n}`.
     fn attach_extra(&self, vm: &VmLink, id: &str, n: u32, extra: &ExtraNetwork) -> Result<(), Error> {
         let net = self.lock_networks().find(&extra.name).cloned().ok_or_else(|| Error::NotFound(format!("network {} not found", extra.name)))?;
-        if net.driver != "bridge" {
+        if !matches!(net.driver.as_str(), "bridge" | "macvlan" | "ipvlan") {
             return Err(Error::BadRequest(format!("only bridge networks can be connected, not {}", net.driver)));
         }
         let ip = match super::network::parse_ip(&extra.ipv4_address) {
@@ -2210,6 +2238,7 @@ impl Engine {
         let mut names = vec![name, hostname];
         names.extend(extra.aliases.iter().cloned());
         let mut opts: Vec<String> = if extra.mac_address.is_empty() { Vec::new() } else { vec![format!("{}={}", kiri_proto::net_opts::MAC, extra.mac_address)] };
+        opts.extend(super::network::guest_options(&net));
         if let (Some(a), Some(v)) = (ip6, &net.v6) {
             opts.push(format!("{}={}/{}", kiri_proto::net_opts::IP6, super::network::ip6_str(a), v.prefix));
             opts.push(format!("{}={}", kiri_proto::net_opts::GW6, super::network::ip6_str(v.gateway)));
@@ -2342,19 +2371,21 @@ impl Engine {
     /// `docker update`: new limits now, and at every later start.
     pub fn update(&self, key: &str, limits: Limits, restart: Option<RestartPolicy>) -> Result<(), Error> {
         let id = self.resolve(key)?;
-        let running = {
-            let mut st = self.lock();
-            let c = st.containers.get_mut(&id).expect("resolved");
-            c.spec.limits = limits;
-            if let Some(r) = restart {
-                c.spec.restart = r;
-            }
-            c.status == Status::Running
-        };
-        self.save();
-        if running {
-            self.vm()?.update(&id, limits.wire())?;
+        if limits.memory_swap > 0 && (limits.memory_swap as u64) < limits.memory_max {
+            return Err(Error::BadRequest("MemorySwap must be at least Memory".into()));
         }
+        if limits.memory_max > 0 && limits.memory_reservation > limits.memory_max {
+            return Err(Error::BadRequest("MemoryReservation must not exceed Memory".into()));
+        }
+        let running = self.with(&id, |c| c.status == Status::Running)?;
+        if running { self.vm()?.update(&id, limits.wire())?; }
+        {
+            let mut st = self.lock();
+            let c = st.containers.get_mut(&id).ok_or_else(|| Error::NotFound(format!("No such container: {id}")))?;
+            c.spec.limits = limits;
+            if let Some(r) = restart { c.spec.restart = r; }
+        }
+        self.save();
         self.emit_container("update", &id, &[]);
         Ok(())
     }
@@ -2513,6 +2544,13 @@ impl Engine {
             if left.is_zero() {
                 drop(st);
                 self.vm()?.kill(&id, libc::SIGKILL as u32)?;
+                // Docker's stop response means the process has exited, even
+                // with t=0. Wait for its exit (or auto-removal) to be recorded.
+                let mut exited = self.lock();
+                while exited.containers.get(&id).is_some_and(|c| c.status == Status::Running) {
+                    exited = self.changed.wait(exited).unwrap_or_else(|e| e.into_inner());
+                }
+                drop(exited);
                 self.emit_container("stop", &id, &[]);
                 return Ok(());
             }

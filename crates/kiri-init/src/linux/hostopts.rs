@@ -55,6 +55,8 @@ pub struct Node {
 
 #[derive(Debug, Default)]
 pub struct HostOpts {
+    pub namespaces: Vec<(String, String)>,
+    pub seccomp: Option<String>,
     /// (RLIMIT_* resource, soft, hard); u64::MAX is unlimited.
     pub rlimits: Vec<(u32, u64, u64)>,
     pub sysctls: Vec<Sysctl>,
@@ -109,6 +111,8 @@ pub fn parse(list: StrList<'_>) -> io::Result<HostOpts> {
                 o.devices.push(Device { host: (*host).to_owned(), container: (*container).to_owned(), perms: (*perms).to_owned() });
             }
             ["devrule", kind, major, minor, perms] => o.rules.push(devices::parse_rule(kind, major, minor, perms).ok_or_else(|| bad(line))?),
+            ["seccomp", profile] => o.seccomp = Some((*profile).into()),
+            ["namespace", kind, mode] if matches!(*kind, "pid" | "ipc" | "uts" | "user" | "cgroup") => o.namespaces.push(((*kind).into(), (*mode).into())),
             ["group", g] if !g.is_empty() => o.groups.push((*g).to_owned()),
             _ => return Err(bad(line)),
         }
