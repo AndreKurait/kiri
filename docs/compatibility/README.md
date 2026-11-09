@@ -78,15 +78,51 @@ The GitHub Actions workflow runs this path on Ubuntu. The harness requires musl
 binaries because its disposable engine containers use Alpine; a host glibc build
 does not run inside that image.
 
-## Remaining work
+## Feature checklist
 
-- Audit parameters, streaming behavior, errors, events, and restart recovery for
-  every scoped operation against Docker.
-- Complete detach-key behavior and older-version semantics for attach.
-- Expand resource, namespace, mount, device, and security-option parity.
-- Test sustained concurrent container/network churn and failure recovery.
-- Measure native Linux latency, memory, and network throughput before making
-  performance claims or introducing optimizations.
+The common workflows below pass the Linux comparison harness. The feature set
+is **not complete Docker container/network API compatibility**. A passing
+workflow does not establish support for every option on its endpoints.
+
+| Included and exercised | Coverage |
+| --- | --- |
+| Container lifecycle | Create, start, wait, stop, restart, rename, remove, pause/unpause, output and exit status |
+| Exec and interactive I/O | Exec, detached exec, bidirectional WebSocket attach, stdin reconnect and `StdinOnce` |
+| Basic resource updates | CPU quota and PID limit removal, cgroup enforcement, invalid updates rejected before mutation |
+| IPv4/IPv6 bridge networks | IPv4-only, dual stack, IPv6-only, automatic and static addressing, subnets and gateways |
+| Container connectivity | DNS A/AAAA, network aliases, connect/disconnect, internal networks, published IPv4/IPv6 ports |
+| Network lifecycle | Inspection of tested address fields, removal, route cleanup and subnet reuse |
+
+### Known missing or incomplete features
+
+These are five **areas**, not five individual missing flags. They are identified
+in the implementation; this is not yet an exhaustive parameter audit.
+
+| Area | Concrete gaps | Implementation evidence |
+| --- | --- | --- |
+| Attach controls | `detachKeys`; raw HTTP attach does not honor historical `logs` or `stream=false`; older API WebSocket semantics | `api.rs::attach`, `websocket.rs` |
+| Advanced resource controls | `CpusetCpus`, `CpusetMems`, configurable `MemorySwap`, `MemoryReservation`, `OomKillDisable` | `api.rs` resource parsing; `kiri-init/src/linux/cgroup.rs::apply_limits` fixes swap to zero |
+| Namespace and security selection | Docker `PidMode`, `IpcMode`, `UTSMode`, `UsernsMode`, `CgroupnsMode`; custom seccomp profiles; GPU device requests | Container spec/create parsing, `engine.rs::security_flags`, `hostopts.rs::check_device_requests` |
+| Advanced networking | macvlan/ipvlan creation; bridge MTU, gateway mode, inter-container communication and masquerade toggles, default host binding address | Network create accepts bridge; `network.rs` stores driver options without applying these settings |
+| Endpoint inspection metadata | Container network `NetworkID` is empty; endpoint IDs are missing/placeholders; IPv4 gateway and automatically assigned MAC are not accurately reported in all inspect views | `api.rs::network_settings`, `api.rs::network_json` |
+
+Only Swarm and plugins were explicitly excluded by the user. Non-bridge
+networking and advanced container options above remain gaps against the broader
+request; they are not silently treated as completed or excluded.
+
+### Verification still needed
+
+Local Linux ARM64 runs passed all 10 comparison scenario groups and 85 IPv6
+checks, with zero failures. Five external IPv6 checks were skipped because the
+host lacks an IPv6 uplink. The reference Docker run passed the same scenario
+groups and 84 IPv6 checks; Docker 28 also skips the newer automatic-subnet static
+IPv6 case. The shell assertions require both a successful command and matching
+output, including negative output assertions.
+
+Exact parameter/error parity across all 36 operations, daemon crash/restart
+recovery, and sustained concurrent churn remain unverified. External IPv6
+egress needs a capable host. Lifecycle benchmarks are available, but do not
+establish network throughput, memory efficiency, or production performance.
 
 No release artifacts are published by this workflow. An independently branded
 release must respect upstream's name/logo policy.

@@ -28,7 +28,7 @@
 #                         (default: 1 when the engine is a local socket)
 #   V6C_KEEP=1            leave the objects for a look (cleanup prints how)
 #   V6C_PORT_BASE=18640   first of the 4 host ports the port cases publish
-set -u
+set -uo pipefail
 
 # The CLI and the engine. A Windows docker.exe run from WSL doesn't see
 # Linux environment variables, so the engine is passed as flags.
@@ -110,16 +110,16 @@ report() { # report RESULT NAME SOURCE [DETAIL]
 # has NAME SOURCE WANT CMD... : PASS when the output contains WANT.
 has() {
   local name=$1 src=$2 want=$3; shift 3
-  local got; got=$(out "$@")
-  if [[ "$got" == *"$want"* ]]; then report PASS "$name" "$src"
-  else report FAIL "$name" "$src" "want: $want | got: $(echo "$got" | head -3 | tr '\n' ' ')"; fi
+  local got rc; got=$(out "$@"); rc=$?
+  if [ "$rc" = 0 ] && [[ "$got" == *"$want"* ]]; then report PASS "$name" "$src"
+  else report FAIL "$name" "$src" "exit: $rc | want: $want | got: $(echo "$got" | head -3 | tr '\n' ' ')"; fi
 }
 # lacks NAME SOURCE UNWANTED CMD... : PASS when the command succeeds and its output doesn't contain UNWANTED.
 lacks() {
   local name=$1 src=$2 bad=$3; shift 3
-  local got rc; got=$(out "$@"); rc=${PIPESTATUS[0]}
-  if [[ "$got" != *"$bad"* ]]; then report PASS "$name" "$src"
-  else report FAIL "$name" "$src" "unwanted: $bad | got: $(echo "$got" | head -3 | tr '\n' ' ')"; fi
+  local got rc; got=$(out "$@"); rc=$?
+  if [ "$rc" = 0 ] && [[ "$got" != *"$bad"* ]]; then report PASS "$name" "$src"
+  else report FAIL "$name" "$src" "exit: $rc | unwanted: $bad | got: $(echo "$got" | head -3 | tr '\n' ' ')"; fi
 }
 # refused NAME SOURCE CMD... : PASS when the command fails (exit != 0).
 refused() {
