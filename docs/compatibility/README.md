@@ -72,9 +72,11 @@ network performance or justify a general speed claim. Linux containers running
 inside Docker Desktop share a Linux VM kernel; use a native Linux host for
 deployment-representative performance results.
 
-On a Linux build host, use `cargo build --release -p kiri -p kiri-init`, then
-`KIRI_BIN_DIR="$PWD/target/release" bash tests/compatibility/linux.sh`.
-The GitHub Actions workflow runs this path on Ubuntu.
+On x86-64 Linux, use `cargo xtask linux --arch amd64`, then
+`KIRI_BIN_DIR="$PWD/target/linux-x86_64/release" bash tests/compatibility/linux.sh`.
+The GitHub Actions workflow runs this path on Ubuntu. The harness requires musl
+binaries because its disposable engine containers use Alpine; a host glibc build
+does not run inside that image.
 
 ## Remaining work
 
