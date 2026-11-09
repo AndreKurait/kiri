@@ -145,12 +145,12 @@ fn top(engine: &Engine, key: &str) -> Result<Value, Error> {
 
 fn update(req: &Request, engine: &Engine, key: &str) -> Result<Value, Error> {
     let b = body(req)?;
-    let base = engine.with(key, |c| c.spec.limits)?;
+    let (base, auto_remove) = engine.with(key, |c| (c.spec.limits, c.spec.auto_remove))?;
+    super::api::validate_limits(&b)?;
     let limits = super::api::limits_from(&b, base);
-    let restart = b["RestartPolicy"]["Name"].as_str().filter(|n| !n.is_empty()).map(|n| super::engine::RestartPolicy {
-        name: n.to_owned(),
-        max_retries: b["RestartPolicy"]["MaximumRetryCount"].as_u64().unwrap_or(0) as u32,
-    });
+    let restart = if b["RestartPolicy"]["Name"].as_str().is_some_and(|n| !n.is_empty()) {
+        Some(super::api::restart_policy(&b["RestartPolicy"], auto_remove)?)
+    } else { None };
     engine.update(key, limits, restart)?;
     Ok(json!({"Warnings": []}))
 }

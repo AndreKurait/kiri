@@ -31,6 +31,7 @@ mod usb;
 mod vmcpu;
 mod vmlink;
 mod volumes;
+mod websocket;
 
 use std::io;
 use std::os::unix::fs::PermissionsExt;

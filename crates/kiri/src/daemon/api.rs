@@ -22,7 +22,16 @@ use super::time;
 pub fn serve(stream: UnixStream, engine: Arc<Engine>) -> io::Result<()> {
     let mut w = stream.try_clone()?;
     let mut r = BufReader::new(stream);
-    while let Some(req) = http::read_request(&mut r, streams_body)? {
+    loop {
+        let req = match http::read_request(&mut r, streams_body) {
+            Ok(Some(req)) => req,
+            Ok(None) => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+                http::error(&mut w, 400, &e.to_string())?;
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
         // The window's action this request is part of: the engine's lines
         // for it carry the same op.
         let _op = req.header("X-Kiri-Op").filter(|o| crate::diag::valid_op(o)).map(|o| crate::diag::enter_op(o.to_owned()));
@@ -46,7 +55,6 @@ pub fn serve(stream: UnixStream, engine: Arc<Engine>) -> io::Result<()> {
             }
         }
     }
-    Ok(())
 }
 
 /// Requests whose bodies can be any size: archives and image tarballs.
@@ -79,6 +87,11 @@ pub(super) fn error(w: &mut UnixStream, e: Error) -> io::Result<()> {
 }
 
 fn route(req: &Request, engine: &Arc<Engine>, w: &mut UnixStream, r: &mut BufReader<UnixStream>) -> io::Result<Next> {
+    if let Some(message) = req.version_error() {
+        http::error(w, 400, &message)?;
+        // A streamed upload may still be unread.
+        return Ok(Next::Close);
+    }
     if let Some(done) = super::ops::route(req, engine, w) {
         return done;
     }
@@ -235,6 +248,7 @@ fn route(req: &Request, engine: &Arc<Engine>, w: &mut UnixStream, r: &mut BufRea
             }
             ("POST", "wait") => return wait(req, engine, id, w),
             ("POST", "attach") => return attach(req, engine, id, w, r),
+            ("GET", "attach/ws") => return super::websocket::attach(req, engine, id, w, r),
             ("GET", "logs") => return logs(req, engine, id, w),
             ("POST", "resize") => return reply(w, resize(req, engine, id).map(|()| json!({})), 200),
             ("POST", "exec") => return reply(w, exec_create(req, engine, id), 201),
@@ -334,10 +348,10 @@ fn version() -> Value {
     let v = env!("CARGO_PKG_VERSION");
     json!({
         "Platform": {"Name": "Kiri"},
-        "Components": [{"Name": "Engine", "Version": v, "Details": {"ApiVersion": http::API_VERSION, "MinAPIVersion": "1.24", "Arch": go_arch(), "Os": "linux"}}],
+        "Components": [{"Name": "Engine", "Version": v, "Details": {"ApiVersion": http::API_VERSION, "MinAPIVersion": http::MIN_API_VERSION, "Arch": go_arch(), "Os": "linux"}}],
         "Version": v,
         "ApiVersion": http::API_VERSION,
-        "MinAPIVersion": "1.24",
+        "MinAPIVersion": http::MIN_API_VERSION,
         "Os": "linux",
         "Arch": go_arch(),
         "KernelVersion": kernel_version(),
@@ -1273,21 +1287,74 @@ pub(super) fn limits_from(h: &Value, base: super::engine::Limits) -> super::engi
     if let Some(n) = h["NanoCpus"].as_u64().filter(|n| *n > 0) {
         // --cpus 1.5 → 150 ms of CPU time every 100 ms.
         l.cpu_period = 100_000;
-        l.cpu_quota = n * 100_000 / 1_000_000_000;
+        l.cpu_quota = ((n as u128 * 100_000) / 1_000_000_000) as u64;
     }
     if let Some(q) = h["CpuQuota"].as_i64().filter(|q| *q > 0) {
         l.cpu_quota = q as u64;
         l.cpu_period = h["CpuPeriod"].as_u64().filter(|p| *p > 0).unwrap_or(100_000) as u32;
+    }
+    if h["CpuQuota"].as_i64() == Some(-1) {
+        l.cpu_quota = 0;
+    }
+    if let Some(period) = h["CpuPeriod"].as_u64().filter(|p| *p > 0) {
+        l.cpu_period = period as u32;
     }
     if let Some(shares) = h["CpuShares"].as_u64().filter(|s| *s > 0) {
         // runc's conversion from v1 shares (2–262144) to v2 weight (1–10000).
         let shares = shares.clamp(2, 262_144);
         l.cpu_weight = (1 + (shares - 2) * 9999 / 262_142) as u32;
     }
-    if let Some(p) = h["PidsLimit"].as_i64().filter(|p| *p > 0) {
-        l.pids_max = p as u32;
+    if let Some(p) = h["PidsLimit"].as_i64() {
+        l.pids_max = if p <= 0 { 0 } else { p as u32 };
     }
     l
+}
+
+pub(super) fn validate_limits(h: &Value) -> Result<(), Error> {
+    for key in ["Memory", "NanoCpus", "CpuQuota", "CpuPeriod", "CpuShares", "PidsLimit"] {
+        if h[key].is_null() {
+            continue;
+        }
+        let n = h[key].as_i64().ok_or_else(|| Error::BadRequest(format!("{key} must be a signed integer")))?;
+        let valid = match key {
+            "Memory" => n == 0 || n >= 6 * 1024 * 1024,
+            "NanoCpus" => n >= 0,
+            "CpuQuota" => n == -1 || n == 0 || n >= 1000,
+            "CpuPeriod" => n == 0 || (1000..=1_000_000).contains(&n),
+            "CpuShares" => n == 0 || (2..=262_144).contains(&n),
+            "PidsLimit" => (-1..=u32::MAX as i64).contains(&n),
+            _ => unreachable!(),
+        };
+        if !valid {
+            return Err(Error::BadRequest(format!("invalid {key}: {n}")));
+        }
+    }
+    if h["NanoCpus"].as_i64().unwrap_or(0) > 0
+        && (h["CpuQuota"].as_i64().unwrap_or(0) != 0 || h["CpuPeriod"].as_i64().unwrap_or(0) != 0) {
+        return Err(Error::BadRequest("conflicting options: NanoCpus and CpuPeriod or CpuQuota".into()));
+    }
+    Ok(())
+}
+
+pub(super) fn restart_policy(value: &Value, auto_remove: bool) -> Result<RestartPolicy, Error> {
+    let name = match value["Name"].as_str() {
+        None | Some("") => "no",
+        Some(name) => name,
+    };
+    if !matches!(name, "no" | "always" | "unless-stopped" | "on-failure") {
+        return Err(Error::BadRequest(format!("invalid restart policy {name}")));
+    }
+    let retries = if value["MaximumRetryCount"].is_null() { 0 } else {
+        value["MaximumRetryCount"].as_u64().and_then(|n| u32::try_from(n).ok())
+            .ok_or_else(|| Error::BadRequest("invalid restart policy maximum retry count".into()))?
+    };
+    if retries != 0 && name != "on-failure" {
+        return Err(Error::BadRequest("maximum retry count can only be used with 'on-failure'".into()));
+    }
+    if auto_remove && name != "no" {
+        return Err(Error::BadRequest("can't create 'AutoRemove' container with restart policy".into()));
+    }
+    Ok(RestartPolicy { name: name.to_owned(), max_retries: retries })
 }
 
 pub(super) fn create(req: &Request, engine: &Engine) -> Result<Value, Error> {
@@ -1297,6 +1364,8 @@ pub(super) fn create(req: &Request, engine: &Engine) -> Result<Value, Error> {
         return Err(Error::BadRequest("no image specified".into()));
     }
     let host = &body["HostConfig"];
+    validate_limits(host)?;
+    let restart = restart_policy(&host["RestartPolicy"], host["AutoRemove"].as_bool().unwrap_or(false))?;
     let network_mode = match host["NetworkMode"].as_str().unwrap_or("default") {
         "" | "default" => "bridge".to_owned(),
         m => m.to_owned(),
@@ -1466,20 +1535,8 @@ pub(super) fn create(req: &Request, engine: &Engine) -> Result<Value, Error> {
         mount_info: mounts.info,
         volumes: mounts.volumes,
         anon_volumes: mounts.anon,
-        restart: RestartPolicy {
-            name: match host["RestartPolicy"]["Name"].as_str() {
-                Some("") | None => "no".to_owned(),
-                Some(n) => n.to_owned(),
-            },
-            max_retries: host["RestartPolicy"]["MaximumRetryCount"].as_u64().unwrap_or(0) as u32,
-        },
+        restart,
     };
-    if !matches!(spec.restart.name.as_str(), "no" | "always" | "unless-stopped" | "on-failure") {
-        return Err(Error::BadRequest(format!("invalid restart policy {}", spec.restart.name)));
-    }
-    if spec.auto_remove && spec.restart.name != "no" {
-        return Err(Error::BadRequest("can't create 'AutoRemove' container with restart policy".into()));
-    }
     let id = engine.create(req.query("name").map(str::to_owned), spec, &image)?;
     Ok(json!({"Id": id, "Warnings": warnings}))
 }
@@ -2163,7 +2220,7 @@ fn exec_start(req: &Request, engine: &Arc<Engine>, id: &str, w: &mut UnixStream,
     if detach {
         // Nobody will read the output; let it drain on its own thread.
         std::thread::spawn(move || for _ in rx {});
-        http::no_content(w)?;
+        http::respond(w, 200, "application/vnd.docker.raw-stream", b"")?;
         return Ok(Next::KeepAlive);
     }
     http::upgrade(w)?;
@@ -2495,6 +2552,51 @@ pub(super) fn parse_signal(raw: &str) -> Result<u32, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_updates_remove_limits_and_preserve_omitted_values() {
+        let base = super::super::engine::Limits {
+            pids_max: 32, cpu_quota: 20000, cpu_period: 100000, memory_max: 67108864,
+            ..Default::default()
+        };
+        let value = json!({"PidsLimit": -1, "CpuQuota": -1});
+        validate_limits(&value).unwrap();
+        let updated = limits_from(&value, base);
+        assert_eq!(updated.pids_max, 0);
+        assert_eq!(updated.cpu_quota, 0);
+        assert_eq!(updated.memory_max, base.memory_max);
+        assert_eq!(updated.cpu_period, base.cpu_period);
+        assert_eq!(limits_from(&json!({"PidsLimit": 0}), base).pids_max, 0);
+        assert_eq!(limits_from(&json!({}), base).pids_max, 32);
+    }
+
+    #[test]
+    fn resource_validation_prevents_truncation_and_conflicting_options() {
+        for value in [
+            json!({"PidsLimit": 4294967296u64}), json!({"PidsLimit": -2}),
+            json!({"CpuPeriod": 1}), json!({"Memory": -1}),
+            json!({"CpuShares": 262145}), json!({"NanoCpus": 1_000_000_000, "CpuQuota": 10000}),
+        ] {
+            assert!(validate_limits(&value).is_err(), "{value}");
+        }
+        let value = json!({"NanoCpus": i64::MAX});
+        // The arithmetic cannot overflow even for an adversarial request.
+        assert_eq!(limits_from(&value, Default::default()).cpu_quota, i64::MAX as u64 / 10000);
+    }
+
+    #[test]
+    fn restart_policy_validation_applies_before_create_and_update() {
+        for value in [
+            json!({"Name": "invalid"}), json!({"Name": "always", "MaximumRetryCount": 1}),
+            json!({"Name": "on-failure", "MaximumRetryCount": -1}),
+            json!({"Name": "on-failure", "MaximumRetryCount": 4294967296u64}),
+        ] {
+            assert!(restart_policy(&value, false).is_err(), "{value}");
+        }
+        assert!(restart_policy(&json!({"Name": "always"}), true).is_err());
+        assert_eq!(restart_policy(&json!({"Name": "on-failure", "MaximumRetryCount": 3}), false).unwrap().max_retries, 3);
+        assert_eq!(restart_policy(&Value::Null, false).unwrap().name, "no");
+    }
 
     #[test]
     fn kernel_release_is_trimmed_and_empty_is_none() {

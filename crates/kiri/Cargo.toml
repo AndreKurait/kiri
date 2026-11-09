@@ -19,6 +19,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Roots for `kiri share`'s connection to the edge.
 webpki-roots = "1"
 rcgen = { version = "0.14", default-features = false, features = ["ring", "pem", "crypto"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 
 [target.'cfg(any(unix, windows))'.dependencies]
 libc = "0.2"

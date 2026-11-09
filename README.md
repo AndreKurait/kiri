@@ -1,3 +1,8 @@
+> **AndreKurait fork:** Linux container and IPv4/IPv6 networking compatibility
+> work lives here. See [scope, validation, and remaining gaps](docs/compatibility/README.md).
+> This fork is not a claim of complete Docker API compatibility. Upstream's
+> performance figures below are not measurements of this fork.
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="brand/logo/kiri-horizontal-dark.svg">

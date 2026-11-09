@@ -1,0 +1,38 @@
+name: Linux container and network compatibility
+on:
+  push:
+    branches: [main, linux-api-compatibility]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: linux-compatibility-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Check scope inventory and Rust tests
+        run: |
+          python3 tests/compatibility/inventory.py
+          cargo test --locked -p kiri -p kiri-image -p kiri-proto
+      - name: Build native Linux engine and agent
+        run: cargo build --locked --release -p kiri -p kiri-init
+      - name: Compare disposable Linux engines
+        env:
+          KIRI_BIN_DIR: ${{ github.workspace }}/target/release
+        run: bash tests/compatibility/linux.sh
+      - name: Preserve conformance and benchmark reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-compatibility
+          path: target/compatibility
+          if-no-files-found: ignore

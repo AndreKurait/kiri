@@ -1,0 +1,261 @@
+{
+  "api_version": "1.48",
+  "source": "https://raw.githubusercontent.com/moby/moby/v28.0.4/api/swagger.yaml",
+  "source_sha256": "01e83f27068aeb08f2e00638eb860149a21311a51345f68f2be642a05cdaa438",
+  "upstream_commit": "9bd6b8c62b2e7f814eedc7f5ad76f7303bdeda9e",
+  "operations": [
+    {
+      "operation": "ContainerList",
+      "method": "GET",
+      "path": "/containers/json",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerCreate",
+      "method": "POST",
+      "path": "/containers/create",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerInspect",
+      "method": "GET",
+      "path": "/containers/{id}/json",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerTop",
+      "method": "GET",
+      "path": "/containers/{id}/top",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerLogs",
+      "method": "GET",
+      "path": "/containers/{id}/logs",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerChanges",
+      "method": "GET",
+      "path": "/containers/{id}/changes",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerExport",
+      "method": "GET",
+      "path": "/containers/{id}/export",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerStats",
+      "method": "GET",
+      "path": "/containers/{id}/stats",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerResize",
+      "method": "POST",
+      "path": "/containers/{id}/resize",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerStart",
+      "method": "POST",
+      "path": "/containers/{id}/start",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerStop",
+      "method": "POST",
+      "path": "/containers/{id}/stop",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerRestart",
+      "method": "POST",
+      "path": "/containers/{id}/restart",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerKill",
+      "method": "POST",
+      "path": "/containers/{id}/kill",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerUpdate",
+      "method": "POST",
+      "path": "/containers/{id}/update",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerRename",
+      "method": "POST",
+      "path": "/containers/{id}/rename",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerPause",
+      "method": "POST",
+      "path": "/containers/{id}/pause",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerUnpause",
+      "method": "POST",
+      "path": "/containers/{id}/unpause",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerAttach",
+      "method": "POST",
+      "path": "/containers/{id}/attach",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerAttachWebsocket",
+      "method": "GET",
+      "path": "/containers/{id}/attach/ws",
+      "status": "partial",
+      "notes": "Binary/text input, binary output, ping/pong, stream filtering, and log replay implemented; detach-key and older API semantics need further audit."
+    },
+    {
+      "operation": "ContainerWait",
+      "method": "POST",
+      "path": "/containers/{id}/wait",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerDelete",
+      "method": "DELETE",
+      "path": "/containers/{id}",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerArchiveInfo",
+      "method": "HEAD",
+      "path": "/containers/{id}/archive",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerArchive",
+      "method": "GET",
+      "path": "/containers/{id}/archive",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "PutContainerArchive",
+      "method": "PUT",
+      "path": "/containers/{id}/archive",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerPrune",
+      "method": "POST",
+      "path": "/containers/prune",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ContainerExec",
+      "method": "POST",
+      "path": "/containers/{id}/exec",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ExecStart",
+      "method": "POST",
+      "path": "/exec/{id}/start",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ExecResize",
+      "method": "POST",
+      "path": "/exec/{id}/resize",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "ExecInspect",
+      "method": "GET",
+      "path": "/exec/{id}/json",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "NetworkList",
+      "method": "GET",
+      "path": "/networks",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "NetworkInspect",
+      "method": "GET",
+      "path": "/networks/{id}",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "NetworkDelete",
+      "method": "DELETE",
+      "path": "/networks/{id}",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "NetworkCreate",
+      "method": "POST",
+      "path": "/networks/create",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "NetworkConnect",
+      "method": "POST",
+      "path": "/networks/{id}/connect",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "NetworkDisconnect",
+      "method": "POST",
+      "path": "/networks/{id}/disconnect",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    },
+    {
+      "operation": "NetworkPrune",
+      "method": "POST",
+      "path": "/networks/prune",
+      "status": "partial",
+      "notes": "Full parameter, response, and failure semantics are not yet verified."
+    }
+  ],
+  "scope": "Containers, exec, and IPv4/IPv6 networking; other subsystems are excluded by request."
+}
