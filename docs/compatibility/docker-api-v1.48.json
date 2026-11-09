@@ -16,14 +16,14 @@
       "method": "POST",
       "path": "/containers/create",
       "status": "partial",
-      "notes": "Full parameter, response, and failure semantics are not yet verified."
+      "notes": "Added namespace selection, custom seccomp profiles, CPU/memory node sets, swap and memory reservations. GPU requests excluded. Full field and error parity remains unverified."
     },
     {
       "operation": "ContainerInspect",
       "method": "GET",
       "path": "/containers/{id}/json",
       "status": "partial",
-      "notes": "Full parameter, response, and failure semantics are not yet verified."
+      "notes": "Network and endpoint IDs, gateway, MAC and advanced HostConfig resource/namespace fields added. Complete response parity remains unverified."
     },
     {
       "operation": "ContainerTop",
@@ -100,7 +100,7 @@
       "method": "POST",
       "path": "/containers/{id}/update",
       "status": "partial",
-      "notes": "Full parameter, response, and failure semantics are not yet verified."
+      "notes": "CPU/PID reset and advanced cgroup resource updates implemented; kernel writes precede persistence and failed updates attempt rollback. Full parameter/error parity remains unverified."
     },
     {
       "operation": "ContainerRename",
@@ -128,14 +128,14 @@
       "method": "POST",
       "path": "/containers/{id}/attach",
       "status": "partial",
-      "notes": "Full parameter, response, and failure semantics are not yet verified."
+      "notes": "Raw HTTP log replay, stream selection, default/custom detach keys and StdinOnce implemented. Full parameter/error parity remains unverified."
     },
     {
       "operation": "ContainerAttachWebsocket",
       "method": "GET",
       "path": "/containers/{id}/attach/ws",
       "status": "partial",
-      "notes": "Binary/text input, binary output, ping/pong, stream filtering, and log replay implemented; detach-key and older API semantics need further audit."
+      "notes": "Bidirectional streaming, version-dependent frame types and stream defaults, log replay and detach keys implemented. Full parameter/error parity remains unverified."
     },
     {
       "operation": "ContainerWait",
@@ -219,7 +219,7 @@
       "method": "GET",
       "path": "/networks/{id}",
       "status": "partial",
-      "notes": "Full parameter, response, and failure semantics are not yet verified."
+      "notes": "Endpoint IDs and MAC now agree with container inspection. Complete response parity remains unverified."
     },
     {
       "operation": "NetworkDelete",
@@ -233,7 +233,7 @@
       "method": "POST",
       "path": "/networks/create",
       "status": "partial",
-      "notes": "Full parameter, response, and failure semantics are not yet verified."
+      "notes": "Bridge, macvlan and ipvlan creation implemented; bridge MTU, ICC, masquerade, binding and gateway options added. Parent devices must exist. All option combinations remain unverified."
     },
     {
       "operation": "NetworkConnect",

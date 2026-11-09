@@ -10,13 +10,15 @@ mkdir -p "$REPORTS"
 test -x "$BIN/kiri"
 test -x "$BIN/kiri-init"
 cleanup() {
-  docker rm -fv "$RUN-kiri" "$RUN-reference" >/dev/null 2>&1 || true
+  docker rm -fv "$RUN-kiri" "$RUN-reference" "$RUN-peer" >/dev/null 2>&1 || true
   docker volume rm "$RUN-sockets" "$RUN-state" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 docker volume create "$RUN-sockets" >/dev/null
 docker volume create "$RUN-state" >/dev/null
+docker run -d --name "$RUN-peer" -v "$ROOT:/src:ro" python:3-alpine   python /src/tests/compatibility/peer.py >/dev/null
+PEER=$(docker inspect "$RUN-peer" -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
 docker run -d --name "$RUN-reference" --privileged \
   -e DOCKER_TLS_CERTDIR= -v "$RUN-sockets:/sockets" \
   -v "$ROOT:/src:ro" -v "$REPORTS:/reports" \
@@ -45,7 +47,7 @@ done
 status=0
 for engine in reference kiri; do
   echo "Container/API checks: $engine"
-  docker exec "$RUN-$engine" python3 /src/tests/compatibility/containers.py \
+  docker exec -e "KIRI_TEST_PEER=$PEER" "$RUN-$engine" python3 /src/tests/compatibility/containers.py \
     --socket "/sockets/$engine.sock" --output "/reports/$engine.json" \
     --benchmark "${KIRI_BENCH_SAMPLES:-50}" || status=1
   echo "IPv6 checks: $engine"

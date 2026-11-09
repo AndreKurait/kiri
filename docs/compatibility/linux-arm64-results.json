@@ -1,0 +1,288 @@
+{
+  "date": "2026-11-09",
+  "environment": "Linux ARM64, kernel 7.0.14-linuxkit, shared Docker Desktop Linux VM; cached Alpine 3.21, network=none; 5 warmups and 50 samples per concurrency",
+  "binary_sha256": {
+    "kiri": "7842f3780f6dff866b285ee4fec5f3f01b81e981f6eac5951ed3eae5f78c46df",
+    "kiri-init": "acde6c4c8e43a0ebd956b4c6417f282dd8204dab6c3c829edde2c7277db94713"
+  },
+  "engines": {
+    "reference": {
+      "checks": [
+        {
+          "name": "advanced-resource-controls",
+          "passed": true,
+          "seconds": 0.2187335000000985
+        },
+        {
+          "name": "endpoint-metadata",
+          "passed": true,
+          "seconds": 0.10750229199993555
+        },
+        {
+          "name": "http-attach-controls",
+          "passed": true,
+          "seconds": 0.2366927079999641
+        },
+        {
+          "name": "namespace-modes",
+          "passed": true,
+          "seconds": 0.4187682090000635
+        },
+        {
+          "name": "custom-seccomp",
+          "passed": true,
+          "seconds": 0.07497091699997327
+        },
+        {
+          "name": "bridge-options",
+          "passed": true,
+          "seconds": 1.2091673339998579
+        },
+        {
+          "name": "source-nat-toggle",
+          "passed": true,
+          "seconds": 4.276202084999795
+        },
+        {
+          "name": "routed-network",
+          "passed": true,
+          "seconds": 0.2096257499999865
+        },
+        {
+          "name": "macvlan",
+          "passed": true,
+          "seconds": 0.37325512500001423
+        },
+        {
+          "name": "ipvlan",
+          "passed": true,
+          "seconds": 0.3536002079999889
+        },
+        {
+          "name": "container-lifecycle",
+          "passed": true,
+          "seconds": 0.19503966599995692
+        },
+        {
+          "name": "pause-restart-detached-exec",
+          "passed": true,
+          "seconds": 0.24897900000019035
+        },
+        {
+          "name": "resource-limit-reset",
+          "passed": true,
+          "seconds": 0.07547858299994914
+        },
+        {
+          "name": "invalid-updates-do-not-mutate",
+          "passed": true,
+          "seconds": 0.011532834000036019
+        },
+        {
+          "name": "websocket-attach-roundtrip",
+          "passed": true,
+          "seconds": 0.1543784999998934
+        },
+        {
+          "name": "websocket-legacy-text",
+          "passed": true,
+          "seconds": 0.16717608299995845
+        },
+        {
+          "name": "websocket-legacy-stream-defaults",
+          "passed": true,
+          "seconds": 0.1697217079999973
+        },
+        {
+          "name": "websocket-stdin-once",
+          "passed": true,
+          "seconds": 0.12362875100006931
+        },
+        {
+          "name": "ipv4-static-address",
+          "passed": true,
+          "seconds": 0.3571593329997995
+        },
+        {
+          "name": "dual-stack-static-address",
+          "passed": true,
+          "seconds": 0.40772370900003807
+        },
+        {
+          "name": "ipv6-only-static-address",
+          "passed": true,
+          "seconds": 0.33253754199995456
+        },
+        {
+          "name": "connect-disconnect-ipv6-dns",
+          "passed": true,
+          "seconds": 0.23976512599983835
+        }
+      ],
+      "ipv6": {
+        "passed": 84,
+        "failed": 0,
+        "skipped": 6
+      },
+      "benchmarks": [
+        {
+          "samples": 50,
+          "concurrency": 1,
+          "network": "none",
+          "median_ms": 61.64039599991611,
+          "p95_ms": 73.20904099992731,
+          "p99_ms": 73.76654200015764,
+          "lifecycles_per_second": 15.995502484424318
+        },
+        {
+          "samples": 50,
+          "concurrency": 8,
+          "network": "none",
+          "median_ms": 133.65029199997025,
+          "p95_ms": 162.78250000004846,
+          "p99_ms": 173.1437079999978,
+          "lifecycles_per_second": 57.42119130695825
+        }
+      ]
+    },
+    "kiri": {
+      "checks": [
+        {
+          "name": "advanced-resource-controls",
+          "passed": true,
+          "seconds": 0.1517109999999775
+        },
+        {
+          "name": "endpoint-metadata",
+          "passed": true,
+          "seconds": 0.03936816700002055
+        },
+        {
+          "name": "http-attach-controls",
+          "passed": true,
+          "seconds": 0.10586208299991995
+        },
+        {
+          "name": "namespace-modes",
+          "passed": true,
+          "seconds": 0.19346504199984338
+        },
+        {
+          "name": "custom-seccomp",
+          "passed": true,
+          "seconds": 0.029082125000059023
+        },
+        {
+          "name": "bridge-options",
+          "passed": true,
+          "seconds": 1.0686798750000435
+        },
+        {
+          "name": "source-nat-toggle",
+          "passed": true,
+          "seconds": 4.105087127000161
+        },
+        {
+          "name": "routed-network",
+          "passed": true,
+          "seconds": 0.06669637499999226
+        },
+        {
+          "name": "macvlan",
+          "passed": true,
+          "seconds": 0.06235366700002487
+        },
+        {
+          "name": "ipvlan",
+          "passed": true,
+          "seconds": 0.0975796249999803
+        },
+        {
+          "name": "container-lifecycle",
+          "passed": true,
+          "seconds": 0.0848316670001168
+        },
+        {
+          "name": "pause-restart-detached-exec",
+          "passed": true,
+          "seconds": 0.08767475000013292
+        },
+        {
+          "name": "resource-limit-reset",
+          "passed": true,
+          "seconds": 0.06052854099993965
+        },
+        {
+          "name": "invalid-updates-do-not-mutate",
+          "passed": true,
+          "seconds": 0.005253541999991285
+        },
+        {
+          "name": "websocket-attach-roundtrip",
+          "passed": true,
+          "seconds": 0.10703525000008085
+        },
+        {
+          "name": "websocket-legacy-text",
+          "passed": true,
+          "seconds": 0.11501679199977843
+        },
+        {
+          "name": "websocket-legacy-stream-defaults",
+          "passed": true,
+          "seconds": 0.11511904199983292
+        },
+        {
+          "name": "websocket-stdin-once",
+          "passed": true,
+          "seconds": 0.034996249999949214
+        },
+        {
+          "name": "ipv4-static-address",
+          "passed": true,
+          "seconds": 0.05054937499994594
+        },
+        {
+          "name": "dual-stack-static-address",
+          "passed": true,
+          "seconds": 0.0964277090001815
+        },
+        {
+          "name": "ipv6-only-static-address",
+          "passed": true,
+          "seconds": 0.14470012499987206
+        },
+        {
+          "name": "connect-disconnect-ipv6-dns",
+          "passed": true,
+          "seconds": 0.14489379100018596
+        }
+      ],
+      "ipv6": {
+        "passed": 85,
+        "failed": 0,
+        "skipped": 5
+      },
+      "benchmarks": [
+        {
+          "samples": 50,
+          "concurrency": 1,
+          "network": "none",
+          "median_ms": 5.374333500071771,
+          "p95_ms": 8.479083000111132,
+          "p99_ms": 9.944540999867968,
+          "lifecycles_per_second": 177.16130870573568
+        },
+        {
+          "samples": 50,
+          "concurrency": 8,
+          "network": "none",
+          "median_ms": 24.570374999939304,
+          "p95_ms": 33.36795800009895,
+          "p99_ms": 43.66412500007755,
+          "lifecycles_per_second": 299.75450046479347
+        }
+      ]
+    }
+  }
+}

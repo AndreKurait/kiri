@@ -12,7 +12,7 @@ use tungstenite::{Message, WebSocket, protocol::Role};
 
 use super::{api::{Next, error}, engine::{Engine, Logs}, http::{self, Request}};
 
-enum Output {
+pub(super) enum Output {
     Live(mpsc::Receiver<(Stream, Vec<u8>)>),
     Logs(Logs),
     Empty,
@@ -48,18 +48,34 @@ pub(super) fn attach(req: &Request, engine: &Arc<Engine>, key: &str, w: &mut Uni
     } else {
         Output::Empty
     };
+    let mut detach = match super::detach::Keys::parse(req.query("detachKeys")) {
+        Ok(keys) => keys,
+        Err(message) => { http::error(w, 400, message)?; return Ok(Next::Close); }
+    };
+    let tty = engine.with(&id, |c| c.spec.tty).unwrap_or(false);
+    let mut detached = false;
     let accept = tungstenite::handshake::derive_accept_key(key_header.as_bytes());
     http::respond_with(w, 101, "application/octet-stream",
         &format!("Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: {accept}\r\n"), b"")?;
     let early = r.buffer().to_vec();
-    let stdin = req.flag("stdin");
-    let result = bridge(w.try_clone()?, early, output, req.flag("stdout"), req.flag("stderr"), |data| {
-        if stdin { engine.input(&id, data).map_err(io::Error::other) } else { Ok(()) }
+    let minor = req.api_version.as_deref().and_then(|v| v.split_once('.')).and_then(|(_, n)| n.parse::<u32>().ok()).unwrap_or(48);
+    let stdin = minor < 42 || req.flag("stdin");
+    let result = bridge(w.try_clone()?, early, output, minor < 42 || req.flag("stdout"), minor < 42 || req.flag("stderr"), minor >= 28, |data| {
+        if !stdin { return Ok(()); }
+        if !tty { return engine.input(&id, data); }
+        let (bytes, stop) = detach.feed(data);
+        if !bytes.is_empty() { engine.input(&id, &bytes)?; }
+        if stop { detached = true; return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "detached")); }
+        Ok(())
     });
-    if stdin && engine.with(&id, |c| c.spec.stdin_once && !c.spec.tty).unwrap_or(false) {
+    if stdin && !detached {
+        let pending = detach.finish();
+        if !pending.is_empty() { let _ = engine.input(&id, &pending); }
+    }
+    if stdin && !detached && engine.with(&id, |c| c.spec.stdin_once && !c.spec.tty).unwrap_or(false) {
         let _ = engine.close_stdin(&id);
     }
-    result?;
+    if !detached { result?; }
     Ok(Next::Close)
 }
 
@@ -80,15 +96,20 @@ fn forward(mut pipe: UnixStream, output: Output, stop: &AtomicBool, stdout: bool
         }
         Ok(())
     };
-    match output {
-        Output::Live(rx) => while !stop.load(Ordering::Relaxed) {
+    output.pump(stop, &mut send);
+}
+
+impl Output {
+    pub(super) fn pump(self, stop: &AtomicBool, mut send: impl FnMut(Stream, &[u8]) -> io::Result<()>) {
+    match self {
+        Self::Live(rx) => while !stop.load(Ordering::Relaxed) {
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok((stream, bytes)) => if send(stream, &bytes).is_err() { break; },
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
         },
-        Output::Logs(logs) => {
+        Self::Logs(logs) => {
             for record in logs.past.tail(None) {
                 if stop.load(Ordering::Relaxed) || send(record.stream, &record.data).is_err() { return; }
             }
@@ -102,7 +123,8 @@ fn forward(mut pipe: UnixStream, output: Output, stop: &AtomicBool, stdout: bool
                 }
             }
         }
-        Output::Empty => {}
+        Self::Empty => {}
+    }
     }
 }
 
@@ -110,7 +132,7 @@ fn blocked(error: &tungstenite::Error) -> bool {
     matches!(error, tungstenite::Error::Io(e) if e.kind() == io::ErrorKind::WouldBlock)
 }
 
-fn bridge(stream: UnixStream, early: Vec<u8>, output: Output, stdout: bool, stderr: bool, mut input: impl FnMut(&[u8]) -> io::Result<()>) -> io::Result<()> {
+fn bridge(stream: UnixStream, early: Vec<u8>, output: Output, stdout: bool, stderr: bool, binary: bool, mut input: impl FnMut(&[u8]) -> io::Result<()>) -> io::Result<()> {
     let (mut incoming, outgoing) = UnixStream::pair()?;
     let stop = Stop(Arc::new(AtomicBool::new(false)));
     let stopping = stop.0.clone();
@@ -157,7 +179,7 @@ fn bridge(stream: UnixStream, early: Vec<u8>, output: Output, stdout: bool, stde
                 Ok(()) => {
                     let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
                     incoming.read_exact(&mut bytes)?;
-                    if let Err(e) = ws.send(Message::Binary(bytes.into())) {
+                    if let Err(e) = ws.send(if binary { Message::Binary(bytes.into()) } else { Message::Frame(tungstenite::protocol::frame::Frame::message(bytes, tungstenite::protocol::frame::coding::OpCode::Data(tungstenite::protocol::frame::coding::Data::Text), true)) }) {
                         if !blocked(&e) { return Err(io::Error::other(e)); }
                     }
                 }
@@ -183,7 +205,7 @@ mod tests {
         client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
         let (tx, rx) = mpsc::channel();
         let (received, input) = mpsc::channel();
-        let worker = std::thread::spawn(move || bridge(server, vec![], Output::Live(rx), true, false, |data| {
+        let worker = std::thread::spawn(move || bridge(server, vec![], Output::Live(rx), true, false, true, |data| {
             received.send(data.to_vec()).unwrap();
             Ok(())
         }));

@@ -249,8 +249,8 @@ has resolv-embedded-dns "$M_RESOLV TestResolvConfLocalhostIPv6" "nameserver 127.
 has icc-ping6-ip "$M_BR TestBridgeICC" "1 packets received" run --rm --network "$N-sub" $IMG ping -6 -c 1 -W 3 "$WEB6"
 has icc-ping6-name "$M_BR TestBridgeICC" "1 packets received" run --rm --network "$N-sub" $IMG ping -6 -c 1 -W 3 "$N-web"
 has icc-http-v6 "$M_BR TestBridgeICC" "Welcome to nginx" run --rm --network "$N-sub" $IMG wget -qO- -T 5 "http://[$WEB6]/"
-has dns-aaaa "$M_BR TestBridgeICC / $DOC_DNS" "$WEB6" run --rm --network "$N-sub" $IMG nslookup -type=AAAA "$N-web"
-has dns-a-still "$DOC_DNS" "Address" run --rm --network "$N-sub" $IMG nslookup -type=A "$N-web"
+has dns-aaaa "$M_BR TestBridgeICC / $DOC_DNS" "$WEB6" run --rm --network "$N-sub" $IMG nslookup -type=AAAA "$N-web."
+has dns-a-still "$DOC_DNS" "Address" run --rm --network "$N-sub" $IMG nslookup -type=A "$N-web."
 # An address on a ULA (auto) network too.
 run -d --name "$N-ula-c" --network "$N-ula" $IMG sleep 300 >/dev/null
 U6=$(v6of "$N-ula-c" "$N-ula")
@@ -407,7 +407,7 @@ EOF
   has compose-subnet "$DOC_COMPOSE" "${S4}/64" d network inspect "${N}_fixed" -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}'
   has compose-ipv6-address "$DOC_COMPOSE_SVC" "${S4}10" d inspect -f "{{(index .NetworkSettings.Networks \"${N}_fixed\").GlobalIPv6Address}}" "${N}-web-1"
   has compose-auto-ula "$DOC_COMPOSE (no ipam: engine pool)" "fd" d network inspect "${N}_auto" -f '{{range .IPAM.Config}}{{.Subnet}} {{end}}'
-  has compose-dns-aaaa "$DOC_COMPOSE" "${S4}10" run --rm --network "${N}_fixed" $IMG nslookup -type=AAAA web
+  has compose-dns-aaaa "$DOC_COMPOSE" "${S4}10" run --rm --network "${N}_fixed" $IMG nslookup -type=AAAA web.
   ok compose-down "$DOC_COMPOSE" d compose -p "$N" -f "$CF" down -t 1
   lacks compose-network-gone "$DOC_COMPOSE" "${N}_fixed" d network ls --format '{{.Name}}'
   rm -rf "$COMPOSE_DIR"; COMPOSE_DIR=

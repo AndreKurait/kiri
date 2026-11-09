@@ -43,6 +43,7 @@ const DEFAULT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/s
 
 /// What networking the agent can offer a new container right now.
 pub struct NetCtx<'a> {
+    pub namespace_pid: &'a dyn Fn(&str) -> Option<libc::pid_t>,
     pub bridges: &'a mut Bridges,
     pub dns: &'a mut super::dns::Dns,
     /// The VM's upstream resolvers, once DHCP has delivered them.
@@ -108,6 +109,9 @@ struct Prepared {
     /// `--network container:<id>`: that container's network namespace, joined
     /// instead of a new one.
     net_join: Option<fs::File>,
+    namespace_joins: Vec<(fs::File, i32)>,
+    shared_shm: Option<OwnedFd>,
+    ipc_none: bool,
     /// Generated /etc files to bind over the image's: (source, target relative to the root).
     etc_files: Vec<(CString, CString)>,
     mounts: Vec<Mount>,
@@ -123,6 +127,7 @@ struct Prepared {
     /// Capabilities kept, one bit each.
     caps: u64,
     seccomp: bool,
+    custom_seccomp: Option<super::custom_seccomp::Filter>,
     no_new_privs: bool,
     readonly_rootfs: bool,
     shm_size: u64,
@@ -254,6 +259,9 @@ pub fn spawn(spec: &RunSpec<'_>, paths: &Paths, net: NetCtx<'_>) -> io::Result<P
         netns = netns_inode(&joined);
         prepared.net_join = Some(joined);
     }
+    if let Some(profile) = &host.seccomp {
+        prepared.custom_seccomp = Some(super::custom_seccomp::compile(profile, prepared.caps).map_err(cleanup)?);
+    }
     prepared.host = HostApplied { rlimits: host.rlimits.clone(), groups: host.groups.clone(), nodes };
     // Small, short-lived files: kept in memory (/run is tmpfs), not on the data disk.
     let etc_dir = PathBuf::from("/run/kiri").join(spec.id);
@@ -285,13 +293,34 @@ pub fn spawn(spec: &RunSpec<'_>, paths: &Paths, net: NetCtx<'_>) -> io::Result<P
     if spec.flags & run_flags::NET_HOST == 0 && prepared.net_join.is_none() {
         flags |= libc::CLONE_NEWNET as u64;
     }
+    let mut pid_join = None;
+    for (kind, mode) in &host.namespaces {
+        let flag = match kind.as_str() { "pid" => libc::CLONE_NEWPID, "ipc" => libc::CLONE_NEWIPC, "uts" => libc::CLONE_NEWUTS, "cgroup" => libc::CLONE_NEWCGROUP, "user" => 0, _ => unreachable!() };
+        if mode == "host" { flags &= !(flag as u64); }
+        if kind == "uts" && mode == "host" { prepared.hostname = None; prepared.domainname = None; }
+        if kind == "ipc" {
+            if mode == "host" { prepared.shared_shm = Some(clone_mount(c"/dev/shm").map_err(cleanup)?); }
+            if mode == "none" { prepared.ipc_none = true; }
+        }
+        if let Some(target) = mode.strip_prefix("container:") {
+            let pid = (net.namespace_pid)(target).ok_or_else(|| cleanup(io::Error::other(format!("namespace target {target} is not running"))))?;
+            let fd = fs::File::open(format!("/proc/{pid}/ns/{kind}")).map_err(cleanup)?;
+            flags &= !(flag as u64);
+            if kind == "pid" { pid_join = Some(fd); }
+            else { prepared.namespace_joins.push((fd, flag)); }
+            if kind == "ipc" { prepared.shared_shm = Some(clone_container_shm(pid).map_err(cleanup)?); }
+        }
+    }
+    // PID setns affects the next child; restore the agent immediately after clone.
+    let own_pid = if pid_join.is_some() { Some(fs::File::open("/proc/self/ns/pid").map_err(cleanup)?) } else { None };
+    if let Some(fd) = &pid_join { sys::setns(fd.as_raw_fd(), libc::CLONE_NEWPID).map_err(cleanup)?; }
     let args = CloneArgs { flags, exit_signal: libc::SIGCHLD as u64, cgroup: cgroup_fd.as_raw_fd() as u64, ..Default::default() };
 
     // SAFETY: the agent is single-threaded, as clone3 without CLONE_VM needs.
-    let pid = unsafe { sys::clone3(&args) }.map_err(cleanup)?;
-    if pid == 0 {
-        container_child(&prepared, &rootfs_c, &child_io);
-    }
+    let cloned = unsafe { sys::clone3(&args) };
+    if matches!(cloned, Ok(0)) { container_child(&prepared, &rootfs_c, &child_io); }
+    if let Some(fd) = own_pid { sys::setns(fd.as_raw_fd(), libc::CLONE_NEWPID).map_err(cleanup)?; }
+    let pid = cloned.map_err(cleanup)?;
     if flags & libc::CLONE_NEWNET as u64 != 0 {
         netns = fs::File::open(format!("/proc/{pid}/ns/net")).map_or(0, |f| netns_inode(&f));
     }
@@ -327,7 +356,7 @@ pub fn spawn(spec: &RunSpec<'_>, paths: &Paths, net: NetCtx<'_>) -> io::Result<P
             // An IPv6-only network's bridge has no IPv4 address to serve on,
             // and its containers no A records.
             if !plug.no_ipv4 {
-                net.dns.serve(spec.net.bridge, spec.net.gateway).map_err(|e| kill_child(io::Error::new(e.kind(), format!("dns: {e}"))))?;
+                if !matches!(plug.driver, "macvlan" | "ipvlan") && net::policy(spec.net.bridge).mode4 != 3 { net.dns.serve(spec.net.bridge, spec.net.gateway).map_err(|e| kill_child(io::Error::new(e.kind(), format!("dns: {e}"))))?; }
                 net.dns.register(spec.net.bridge, spec.net.dns_names.iter(), spec.net.ip);
             }
             // 127.0.0.11 in the container, when its resolv.conf names it. Not
@@ -423,6 +452,9 @@ pub fn exec(spec: &ExecSpec<'_>, target_pid: libc::pid_t, paths: &Paths) -> io::
     let mut prepared = prepare(spec.argv, spec.env, spec.cwd, spec.user, None, spec.flags, spec.caps)?;
     // The container's ulimits and groups apply to its execs too, as with runc.
     let host = super::hostopts::parse(spec.opts)?;
+    if let Some(profile) = &host.seccomp {
+        prepared.custom_seccomp = Some(super::custom_seccomp::compile(profile, prepared.caps)?);
+    }
     prepared.host = HostApplied { rlimits: host.rlimits, groups: host.groups, nodes: Vec::new() };
     let (parent_io, child_io) = stdio(&prepared)?;
     let args = CloneArgs {
@@ -664,6 +696,9 @@ fn prepare(argv: StrList<'_>, env: StrList<'_>, cwd: &str, user: &str, hostname:
         hostname: hostname.map(|h| h.as_bytes().to_vec()),
         domainname: None,
         net_join: None,
+        namespace_joins: Vec::new(),
+        shared_shm: None,
+        ipc_none: false,
         etc_files: Vec::new(),
         mounts: Vec::new(),
         net_ready: None,
@@ -674,6 +709,7 @@ fn prepare(argv: StrList<'_>, env: StrList<'_>, cwd: &str, user: &str, hostname:
         stdin: flags & run_flags::STDIN != 0,
         privileged: flags & run_flags::PRIVILEGED != 0,
         caps: if caps == 0 { default_caps() } else { caps },
+        custom_seccomp: None,
         seccomp: flags & (run_flags::PRIVILEGED | run_flags::NO_SECCOMP) == 0,
         no_new_privs: flags & run_flags::NO_NEW_PRIVS != 0,
         readonly_rootfs: flags & run_flags::READONLY_ROOTFS != 0,
@@ -1030,13 +1066,16 @@ fn container_child(p: &Prepared, rootfs: &CStr, io: &ChildStdio) -> ! {
     if let Some(ns) = &p.net_join {
         sys::setns(ns.as_raw_fd(), libc::CLONE_NEWNET).unwrap_or_else(|e| fail("join network container", e));
     }
+    for (fd, kind) in &p.namespace_joins {
+        sys::setns(fd.as_raw_fd(), *kind).unwrap_or_else(|e| fail("join namespace", e));
+    }
     // SAFETY: `rootfs` is a valid NUL-terminated path.
     if unsafe { libc::chdir(rootfs.as_ptr()) } != 0 {
         fail("enter rootfs", io::Error::last_os_error());
     }
     let root = inroot::open_root(Path::new(".")).unwrap_or_else(|e| fail("enter rootfs", e));
     let root = root.as_fd();
-    mount_container_filesystems(p.privileged, p.shm_size).unwrap_or_else(|e| fail("mount", e));
+    mount_container_filesystems(p.privileged, p.shm_size, p.shared_shm.as_ref().map(|f| f.as_raw_fd()), p.ipc_none).unwrap_or_else(|e| fail("mount", e));
     super::hostopts::make_nodes(root, &p.host.nodes).unwrap_or_else(|e| fail("devices", e));
     for (src, target) in &p.etc_files {
         bind_file(root, src, target).unwrap_or_else(|e| fail(&target.to_string_lossy(), e));
@@ -1178,7 +1217,11 @@ fn finish_child(p: &Prepared, io: &ChildStdio, console: bool) -> ! {
     // While still root with CAP_SYS_ADMIN, which installing a filter needs.
     // Without the default profile the host boundary stays: vsock is not
     // namespaced, and privileges inside the VM are no reason to reach the host.
-    super::seccomp::install(p.seccomp.then_some(p.caps)).unwrap_or_else(|e| fail("seccomp", e));
+    if let Some(filter) = &p.custom_seccomp {
+        filter.install().unwrap_or_else(|e| fail("custom seccomp", e));
+    } else {
+        super::seccomp::install(p.seccomp.then_some(p.caps)).unwrap_or_else(|e| fail("seccomp", e));
+    }
     let (uid, gid) = resolve_user(&p.user).unwrap_or_else(|e| fail("user", e));
     // The user's /etc/group memberships and --group-add, as Docker gives them.
     let groups = super::hostopts::supplementary_groups(&p.user, uid, &p.host.groups).unwrap_or_else(|e| fail("groups", e));
@@ -1236,7 +1279,32 @@ fn finish_child(p: &Prepared, io: &ChildStdio, console: bool) -> ! {
 /// /dev/pts, /dev/shm, /dev/mqueue and a read-only cgroup view. Relative
 /// paths: the current directory is the container root. A privileged
 /// container gets the VM's devices and writable /sys and cgroups instead.
-fn mount_container_filesystems(privileged: bool, shm_size: u64) -> io::Result<()> {
+fn clone_container_shm(pid: libc::pid_t) -> io::Result<OwnedFd> {
+    // open_tree cannot clone a mount owned by another mount namespace.
+    // The single-threaded agent enters it only to obtain the detached tree.
+    let own = fs::File::open("/proc/self/ns/mnt")?;
+    let target = fs::File::open(format!("/proc/{pid}/ns/mnt"))?;
+    let root = fs::File::open("/")?;
+    let cwd = fs::File::open(".")?;
+    sys::setns(target.as_raw_fd(), libc::CLONE_NEWNS)?;
+    let tree = clone_mount(c"/dev/shm");
+    sys::setns(own.as_raw_fd(), libc::CLONE_NEWNS)?;
+    // setns also changes the root and working directory; restore both from
+    // descriptors, because the target's root may hide all agent paths.
+    if unsafe { libc::fchdir(root.as_raw_fd()) } < 0 { return Err(io::Error::last_os_error()); }
+    if unsafe { libc::chroot(c".".as_ptr()) } < 0 { return Err(io::Error::last_os_error()); }
+    if unsafe { libc::fchdir(cwd.as_raw_fd()) } < 0 { return Err(io::Error::last_os_error()); }
+    tree
+}
+
+fn clone_mount(source: &CStr) -> io::Result<OwnedFd> {
+    // OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC: snapshot the mount, not its data.
+    let fd = unsafe { libc::syscall(libc::SYS_open_tree, libc::AT_FDCWD, source.as_ptr(), 1 | libc::O_CLOEXEC) };
+    if fd < 0 { return Err(io::Error::last_os_error()); }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd as RawFd) })
+}
+
+fn mount_container_filesystems(privileged: bool, shm_size: u64, shared_shm: Option<RawFd>, ipc_none: bool) -> io::Result<()> {
     let nosuid_nodev_noexec = libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
     let ro = if privileged { 0 } else { libc::MS_RDONLY };
     for d in [c"proc", c"sys", c"dev"] {
@@ -1296,7 +1364,14 @@ fn mount_container_filesystems(privileged: bool, shm_size: u64) -> io::Result<()
     }
     sys::mount(c"devpts", c"dev/pts", c"devpts", libc::MS_NOSUID | libc::MS_NOEXEC, Some(c"newinstance,ptmxmode=0666,mode=0620,gid=5"))?;
     let shm = CString::new(format!("mode=1777,size={}k", shm_size.div_ceil(1024))).expect("no NUL");
-    sys::mount(c"shm", c"dev/shm", c"tmpfs", nosuid_nodev_noexec, Some(&shm))?;
+    if let Some(source) = shared_shm {
+        // A detached tree can cross mount namespaces; bind-mounting an FD
+        // into the old namespace directly would fail with EINVAL.
+        let rc = unsafe { libc::syscall(libc::SYS_move_mount, source, c"".as_ptr(), libc::AT_FDCWD, c"dev/shm".as_ptr(), 4 /* MOVE_MOUNT_F_EMPTY_PATH */) };
+        if rc < 0 { return Err(io::Error::last_os_error()); }
+    } else if !ipc_none {
+        sys::mount(c"shm", c"dev/shm", c"tmpfs", nosuid_nodev_noexec, Some(&shm))?;
+    }
     sys::mount(c"mqueue", c"dev/mqueue", c"mqueue", nosuid_nodev_noexec, None)?;
     sys::mkdir(c"sys/fs/cgroup", 0o755);
     sys::mount(c"cgroup2", c"sys/fs/cgroup", c"cgroup2", nosuid_nodev_noexec | ro, None)?;

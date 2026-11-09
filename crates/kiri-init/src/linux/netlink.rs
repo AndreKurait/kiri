@@ -223,6 +223,38 @@ fn random_bytes() -> [u8; 6] {
     b
 }
 
+pub fn create_dummy(nl: &mut Netlink, name: &str) -> io::Result<()> {
+    let mut m = Msg::new(RTM_NEWLINK, NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL);
+    m.raw(&ifinfo(0, 0, 0)).attr_str(IFLA_IFNAME, name);
+    m.nest(IFLA_LINKINFO).attr_str(IFLA_INFO_KIND, "dummy").end();
+    match nl.request(&mut [m]) { Err(e) if e.raw_os_error() == Some(libc::EEXIST) => Ok(()), r => r }
+}
+
+pub fn set_mtu(nl: &mut Netlink, index: i32, mtu: u32) -> io::Result<()> {
+    let mut m = Msg::new(RTM_NEWLINK, NLM_F_ACK);
+    m.raw(&ifinfo(index, 0, 0)).attr_u32(IFLA_MTU, mtu);
+    nl.request(&mut [m])
+}
+
+pub fn create_direct(nl: &mut Netlink, parent: &str, netns: &std::fs::File, name: &str, plug: super::net::Plug<'_>, mac: Option<[u8; 6]>) -> io::Result<()> {
+    let index = index_of(parent)?;
+    let mut m = Msg::new(RTM_NEWLINK, NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL);
+    m.raw(&ifinfo(0, 0, 0)).attr_u32(5, index as u32).attr_str(IFLA_IFNAME, name)
+        .attr_u32(IFLA_NET_NS_FD, netns.as_raw_fd() as u32).attr_u32(IFLA_MTU, plug.mtu);
+    if plug.driver == "macvlan" { if let Some(mac) = mac { m.attr(IFLA_ADDRESS, &mac); } }
+    m.nest(IFLA_LINKINFO).attr_str(IFLA_INFO_KIND, plug.driver).nest(IFLA_INFO_DATA);
+    if plug.driver == "macvlan" {
+        let mode = match plug.mode { "private" => 1, "vepa" => 2, "passthru" => 8, _ => 4 };
+        m.attr_u32(1, mode);
+    } else {
+        let mode: u16 = match plug.mode { "l3" => 1, "l3s" => 2, _ => 0 };
+        let flag: u16 = match plug.ipvlan_flag { "private" => 1, "vepa" => 2, _ => 0 };
+        m.attr(1, &mode.to_ne_bytes()).attr(2, &flag.to_ne_bytes());
+    }
+    m.end().end();
+    nl.request(&mut [m])
+}
+
 /// Creates a veth pair: `host` stays here, attached to `bridge` and up; its
 /// peer is created straight inside `netns` as `peer`. The kernel picks the
 /// peer's interface index: a new namespace is not always only lo (with ipip
@@ -300,6 +332,15 @@ pub fn add_default_route6(nl: &mut Netlink, index: i32, gateway: [u8; 16]) -> io
         Err(e) if e.raw_os_error() == Some(libc::EEXIST) => Ok(()),
         r => r,
     }
+}
+
+pub fn add_link_default(nl: &mut Netlink, index: i32, v6: bool) -> io::Result<()> {
+    let mut m = Msg::new(RTM_NEWROUTE, NLM_F_ACK | NLM_F_CREATE);
+    let mut rt = [0u8; 12];
+    rt[0] = if v6 { libc::AF_INET6 } else { libc::AF_INET } as u8;
+    rt[4] = libc::RT_TABLE_MAIN; rt[5] = libc::RTPROT_BOOT; rt[6] = libc::RT_SCOPE_LINK; rt[7] = libc::RTN_UNICAST;
+    m.raw(&rt).attr_u32(RTA_OIF, index as u32);
+    match nl.request(&mut [m]) { Err(e) if e.raw_os_error() == Some(libc::EEXIST) => Ok(()), r => r }
 }
 
 pub fn add_default_route(nl: &mut Netlink, index: i32, gateway: [u8; 4]) -> io::Result<()> {
@@ -633,9 +674,46 @@ fn forward_filter_in(family: u8, bridges: &[String]) -> Vec<Msg> {
         rule(&ct_any(0, CT_ESTABLISHED | CT_RELATED), accept), // NFT_CT_STATE
         rule(&ct_any(2, CT_STATUS_DNAT), accept),              // NFT_CT_STATUS
     ];
-    msgs.extend(bridges.iter().map(|b| rule(&same_bridge(b), accept)));
+    for b in bridges {
+        let policy = super::net::policy(b);
+        msgs.push(rule(&same_bridge(b), if policy.icc { accept } else { drop }));
+        let mode = if family == libc::NFPROTO_IPV6 as u8 { policy.mode6 } else { policy.mode4 };
+        if mode == 2 {
+            msgs.push(rule(&|r| match_interface(r, 7, b), accept));
+        }
+    }
+    for port in super::net::routed_ports() {
+        let policy = super::net::policy(&port.bridge);
+        let v6 = family == libc::NFPROTO_IPV6 as u8;
+        if port.ipv6 != v6 || (if v6 { policy.mode6 } else { policy.mode4 }) != 1 || (v6 && port.ip6.is_none()) { continue; }
+        msgs.push(rule(&|r| {
+            match_interface(r, 7, &port.bridge);
+            let address: Vec<u8> = if v6 { port.ip6.unwrap().to_vec() } else { port.ip.to_vec() };
+            r.nest(1).attr_str(1, "payload").nest(2).attr_be32(1, 1).attr_be32(2, 1).attr_be32(3, if v6 { 24 } else { 16 }).attr_be32(4, address.len() as u32).end().end();
+            r.nest(1).attr_str(1, "cmp").nest(2).attr_be32(1, 1).attr_be32(2, 0).nest(3).attr(1, &address).end().end().end();
+            r.nest(1).attr_str(1, "meta").nest(2).attr_be32(1, 1).attr_be32(2, 16).end().end();
+            r.nest(1).attr_str(1, "cmp").nest(2).attr_be32(1, 1).attr_be32(2, 0).nest(3).attr(1, &[if port.udp { 17 } else { 6 }]).end().end().end();
+            r.nest(1).attr_str(1, "payload").nest(2).attr_be32(1, 1).attr_be32(2, 2).attr_be32(3, 2).attr_be32(4, 2).end().end();
+            r.nest(1).attr_str(1, "cmp").nest(2).attr_be32(1, 1).attr_be32(2, 0).nest(3).attr(1, &port.port.to_be_bytes()).end().end().end();
+        }, accept));
+    }
     msgs.push(rule(&|_| {}, drop));
     msgs
+}
+
+fn match_interface(r: &mut Msg, key: u32, name: &str) {
+    let mut full = [0u8; 16];
+    let n = name.len().min(15); full[..n].copy_from_slice(&name.as_bytes()[..n]);
+    r.nest(1).attr_str(1, "meta").nest(2).attr_be32(1, 1).attr_be32(2, key).end().end();
+    r.nest(1).attr_str(1, "cmp").nest(2).attr_be32(1, 1).attr_be32(2, 0).nest(3).attr(1, &full).end().end().end();
+}
+
+fn no_masquerade(name: &str) -> Msg {
+    let mut r = nft(NFT_MSG_NEWRULE, NLM_F_ACK | NLM_F_CREATE | 0x800);
+    r.attr_str(1, "kiri").attr_str(2, "postrouting").nest(4);
+    match_interface(&mut r, 6, name);
+    r.nest(1).attr_str(1, "immediate").nest(2).attr_be32(1, 0).nest(2).nest(2).attr_be32(1, libc::NF_ACCEPT as u32).end().end().end().end();
+    r.end(); r
 }
 
 /// The input filter that keeps containers off the host's loopback:
@@ -775,7 +853,7 @@ pub fn install_nat6(subnets: &[([u8; 16], u8)], bridges: &[String]) -> io::Resul
     let mut end = Msg::new(NFNL_MSG_BATCH_END, 0);
     end.raw(&nfgen(libc::AF_UNSPEC as u8, NFNL_SUBSYS_NFTABLES));
     let mut msgs = vec![begin, destroy];
-    if !subnets.is_empty() {
+    if !bridges.is_empty() {
         let mut table = nft_in(v6, NFT_MSG_NEWTABLE, NLM_F_ACK | NLM_F_CREATE);
         table.attr_str(1, "kiri");
         let mut chain = nft_in(v6, NFT_MSG_NEWCHAIN, NLM_F_ACK | NLM_F_CREATE);
@@ -784,7 +862,9 @@ pub fn install_nat6(subnets: &[([u8; 16], u8)], bridges: &[String]) -> io::Resul
         chain.attr_be32(5, 1).attr_str(7, "nat");
         msgs.push(table);
         msgs.push(chain);
-        msgs.extend(subnets.iter().map(|(s, p)| masq6_rule(*s, *p)));
+        msgs.extend(subnets.iter().zip(bridges).filter(|(_, name)| {
+            let p = super::net::policy(name); p.masq && p.mode6 != 1 && p.mode6 != 3
+        }).map(|((s, p), _)| masq6_rule(*s, *p)));
         msgs.extend(forward_filter_in(v6, bridges));
     }
     msgs.push(end);
@@ -860,7 +940,9 @@ pub fn install_nat_from(uplink_index: i32, host_addr: [u8; 4], host_port: u16, r
         // A Linux host: no host.docker.internal redirect, but its published
         // ports are DNATed here (prerouting for the LAN, output for the host
         // itself), the whole table rebuilt on every change, atomically.
-        let mut msgs = vec![begin, destroy, table, chain, rule];
+        let mut msgs = vec![begin, destroy, table, chain];
+        msgs.extend(bridges.iter().filter(|b| { let p = super::net::policy(b); !p.masq || p.mode4 == 1 || p.mode4 == 3 }).map(|b| no_masquerade(b)));
+        msgs.push(rule);
         msgs.extend(forward_filter(bridges));
         msgs.extend(localnet_guard());
         msgs.push(nat_chain("prerouting", 0, -100));

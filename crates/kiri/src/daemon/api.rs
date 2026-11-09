@@ -1237,6 +1237,12 @@ fn ports_map(c: &Container) -> Value {
             }
         }
     }
+    if c.status == Status::Running {
+        for b in &c.spec.routed_ports {
+            let entry = m.entry(format!("{}/{}", b.container_port, b.proto)).or_insert_with(|| json!([]));
+            entry.as_array_mut().unwrap().push(json!({"HostIp": b.host_ip, "HostPort": ""}));
+        }
+    }
     Value::Object(m)
 }
 
@@ -1297,6 +1303,10 @@ fn caps_from(host: &Value) -> Result<u64, Error> {
 
 pub(super) fn limits_from(h: &Value, base: super::engine::Limits) -> super::engine::Limits {
     let mut l = base;
+    if let Some(v) = h["MemorySwap"].as_i64().filter(|v| *v != 0) { l.memory_swap = v; }
+    if let Some(v) = h["MemoryReservation"].as_u64().filter(|v| *v != 0) { l.memory_reservation = v; }
+    if let Some(v) = h["CpusetCpus"].as_str().filter(|v| !v.is_empty()) { l.cpuset_cpus = v.to_owned(); }
+    if let Some(v) = h["CpusetMems"].as_str().filter(|v| !v.is_empty()) { l.cpuset_mems = v.to_owned(); }
     if let Some(m) = h["Memory"].as_u64().filter(|m| *m > 0) {
         l.memory_max = m;
     }
@@ -1327,13 +1337,15 @@ pub(super) fn limits_from(h: &Value, base: super::engine::Limits) -> super::engi
 }
 
 pub(super) fn validate_limits(h: &Value) -> Result<(), Error> {
-    for key in ["Memory", "NanoCpus", "CpuQuota", "CpuPeriod", "CpuShares", "PidsLimit"] {
+    for key in ["Memory", "MemorySwap", "MemoryReservation", "NanoCpus", "CpuQuota", "CpuPeriod", "CpuShares", "PidsLimit"] {
         if h[key].is_null() {
             continue;
         }
         let n = h[key].as_i64().ok_or_else(|| Error::BadRequest(format!("{key} must be a signed integer")))?;
         let valid = match key {
             "Memory" => n == 0 || n >= 6 * 1024 * 1024,
+            "MemorySwap" => n >= -1,
+            "MemoryReservation" => n >= 0,
             "NanoCpus" => n >= 0,
             "CpuQuota" => n == -1 || n == 0 || n >= 1000,
             "CpuPeriod" => n == 0 || (1000..=1_000_000).contains(&n),
@@ -1345,6 +1357,26 @@ pub(super) fn validate_limits(h: &Value) -> Result<(), Error> {
         if !valid {
             return Err(Error::BadRequest(format!("invalid {key}: {n}")));
         }
+    }
+    for key in ["CpusetCpus", "CpusetMems"] {
+        if h[key].is_null() { continue; }
+        let value = h[key].as_str().ok_or_else(|| Error::BadRequest(format!("{key} must be a string")))?;
+        if !value.is_empty() && !value.split(',').all(|part| {
+            let mut range = part.split('-');
+            let start = range.next().and_then(|v| v.parse::<u32>().ok());
+            let end = range.next().map(|v| v.parse::<u32>());
+            range.next().is_none() && match (start, end) { (Some(_), None) => true, (Some(a), Some(Ok(b))) => a <= b, _ => false }
+        }) { return Err(Error::BadRequest(format!("invalid {key}: {value}"))); }
+    }
+    if !h["OomKillDisable"].is_null() && !h["OomKillDisable"].is_boolean() {
+        return Err(Error::BadRequest("OomKillDisable must be a boolean".into()));
+    }
+    // Linux cgroup v2 has no per-cgroup OOM-killer disable switch.
+    if h["OomKillDisable"] == true {
+        return Err(Error::BadRequest("OomKillDisable is not supported by Linux cgroup v2".into()));
+    }
+    if h["MemorySwap"].as_i64().unwrap_or(0) > 0 && h["Memory"].as_u64().unwrap_or(0) > h["MemorySwap"].as_u64().unwrap_or(0) {
+        return Err(Error::BadRequest("MemorySwap must be at least Memory".into()));
     }
     if h["NanoCpus"].as_i64().unwrap_or(0) > 0
         && (h["CpuQuota"].as_i64().unwrap_or(0) != 0 || h["CpuPeriod"].as_i64().unwrap_or(0) != 0) {
@@ -1458,7 +1490,26 @@ pub(super) fn create(req: &Request, engine: &Engine) -> Result<Value, Error> {
     let warnings: Vec<&str> = Vec::new();
     // --ulimit, --sysctl, --device, --device-cgroup-rule, --group-add:
     // refused now with Docker's error rather than at start.
-    let host_opts = super::hostopts::from_host(host);
+    let mut host_opts = super::hostopts::from_host(host);
+    for field in ["PidMode", "IpcMode"] {
+        if let Some(target) = host_opts[field].as_str().and_then(|v| v.strip_prefix("container:")) {
+            let id = engine.resolve(target)?;
+            if field == "IpcMode" && engine.with(&id, |c| c.spec.host_opts["IpcMode"].as_str() != Some("shareable"))? {
+                return Err(Error::BadRequest("target container IPC namespace is not shareable".into()));
+            }
+            host_opts[field] = json!(format!("container:{id}"));
+        }
+    }
+    if host_opts["UTSMode"] == "host" && (!body["Hostname"].as_str().unwrap_or_default().is_empty() || !body["Domainname"].as_str().unwrap_or_default().is_empty()) {
+        return Err(Error::BadRequest("hostname and domainname conflict with host UTS mode".into()));
+    }
+    if let Some(sysctls) = host_opts["Sysctls"].as_object() {
+        for key in sysctls.keys() {
+            if host_opts["IpcMode"].as_str().is_some_and(|v| v == "host" || v.starts_with("container:")) && (key.starts_with("kernel.shm") || key.starts_with("kernel.sem") || key.starts_with("kernel.msg") || key.starts_with("fs.mqueue")) {
+                return Err(Error::BadRequest("IPC sysctls conflict with shared IPC mode".into()));
+            }
+        }
+    }
     super::hostopts::guest_lines(&host_opts, network_mode == "host").map_err(Error::BadRequest)?;
     super::hostopts::check_device_requests(host).map_err(Error::BadRequest)?;
     if let Some(s) = body["StopSignal"].as_str().filter(|s| !s.is_empty()) {
@@ -1481,7 +1532,27 @@ pub(super) fn create(req: &Request, engine: &Engine) -> Result<Value, Error> {
     // Checked before mounts, which may create volumes.
     let healthcheck = healthcheck_from(&body, &image_cfg)?;
     let mounts = mounts(&body, engine, &image)?;
-    let ports = port_bindings(&body, engine, &image)?;
+    let mut ports = port_bindings(&body, engine, &image)?;
+    if let Some(binding) = engine.lock_net().find(&network_mode).and_then(|n| n.options["com.docker.network.bridge.host_binding_ipv4"].as_str()) {
+        for port in &mut ports { if port.host_ip.is_empty() { port.host_ip = binding.to_owned(); } }
+    }
+    let mut routed_ports = Vec::new();
+    if let Some(network) = engine.lock_net().find(&network_mode) {
+        let routed4 = network.options["com.docker.network.bridge.gateway_mode_ipv4"] == "routed";
+        let routed6 = network.options["com.docker.network.bridge.gateway_mode_ipv6"] == "routed";
+        if routed4 || routed6 {
+            let mut bound = Vec::new();
+            for port in ports {
+                let families: Vec<&str> = if port.host_ip.is_empty() { vec!["0.0.0.0", "::"] } else { vec![&port.host_ip] };
+                for ip in families {
+                    let mut p = port.clone(); p.host_ip = ip.to_owned();
+                    if (ip.contains(':') && routed6) || (!ip.contains(':') && routed4) { p.host_port = 0; routed_ports.push(p); }
+                    else { bound.push(p); }
+                }
+            }
+            ports = bound;
+        }
+    }
     if !ports.is_empty() && network_mode == "none" {
         return Err(Error::BadRequest("a container with --network none cannot publish ports".into()));
     }
@@ -1553,6 +1624,7 @@ pub(super) fn create(req: &Request, engine: &Engine) -> Result<Value, Error> {
         aliases,
         extra_hosts,
         ports,
+        routed_ports,
         exposed: exposed_ports(&body, engine, &image),
         host_opts,
         mounts: mounts.guest,
@@ -1561,6 +1633,7 @@ pub(super) fn create(req: &Request, engine: &Engine) -> Result<Value, Error> {
         anon_volumes: mounts.anon,
         restart,
     };
+    spec.guest_opts(spec.network_mode == "host")?;
     let id = engine.create(req.query("name").map(str::to_owned), spec, &image)?;
     Ok(json!({"Id": id, "Warnings": warnings}))
 }
@@ -1714,23 +1787,25 @@ fn endpoints(c: &Container, networks: &[super::network::Network]) -> Value {
     let mut out = serde_json::Map::new();
     let mut add = |name: &str, ip: Option<[u8; 4]>, ip6: Option<[u8; 16]>, aliases: &[String], want4: &str, want6: &str| {
         let net = networks.iter().find(|n| n.name == name || n.id == name);
+        let mac_ip = ip.filter(|_| running);
         let ip = ip.filter(|_| running && !net.is_some_and(|n| n.no_ipv4));
         let ip6 = ip6.filter(|_| running);
         let gateway = match (ip, net) {
-            (Some(_), Some(n)) if n.gateway != [0; 4] => super::network::ip_str(n.gateway),
+            (Some(_), Some(n)) if n.gateway != [0; 4] && n.options["com.docker.network.bridge.gateway_mode_ipv4"] != "isolated" => super::network::ip_str(n.gateway),
             _ => String::new(),
         };
-        let v6 = net.and_then(|n| n.v6.as_ref()).filter(|_| ip6.is_some());
+        let v6 = net.filter(|n| n.options["com.docker.network.bridge.gateway_mode_ipv6"] != "isolated").and_then(|n| n.v6.as_ref()).filter(|_| ip6.is_some());
+        let mac = if name == c.spec.network_mode { c.spec.mac_address.as_str() } else { c.spec.extra_networks.iter().find(|n| n.name == name).map(|n| n.mac_address.as_str()).unwrap_or_default() };
         out.insert(
             name.to_owned(),
             json!({
                 "IPAMConfig": ipam_config(want4, want6),
                 "Links": null,
                 "Aliases": if aliases.is_empty() { Value::Null } else { json!(aliases) },
-                "MacAddress": "",
+                "MacAddress": endpoint_mac_on(net, mac_ip, mac),
                 "DriverOpts": null,
                 "NetworkID": net.map(|n| n.id.clone()).unwrap_or_default(),
-                "EndpointID": if running { c.id.as_str() } else { "" },
+                "EndpointID": if running && mac_ip.is_some() { endpoint_id(net.map(|n| n.id.as_str()).unwrap_or_default(), &c.id) } else { String::new() },
                 "Gateway": gateway,
                 "IPAddress": ip.map(super::network::ip_str).unwrap_or_default(),
                 "IPPrefixLen": if ip.is_some() { net.map_or(16, |n| n.prefix) } else { 0 },
@@ -1857,7 +1932,7 @@ fn list(req: &Request, engine: &Engine) -> Result<Value, Error> {
 fn inspect(c: &Container, nets: &[super::network::Network]) -> Value {
     let when = |t: Option<std::time::SystemTime>| t.map_or_else(|| time::ZERO.to_owned(), time::rfc3339);
     let argv = c.argv();
-    json!({
+    let mut result = json!({
         "Id": c.id,
         "Created": time::rfc3339(c.created),
         "Path": argv.first().cloned().unwrap_or_default(),
@@ -1926,7 +2001,38 @@ fn inspect(c: &Container, nets: &[super::network::Network]) -> Value {
         },
         "NetworkSettings": network_settings(c, nets),
         "Mounts": c.spec.mount_info,
-    })
+    });
+    let host = &mut result["HostConfig"];
+    host["MemorySwap"] = json!(c.spec.limits.memory_swap);
+    host["MemoryReservation"] = json!(c.spec.limits.memory_reservation);
+    host["CpusetCpus"] = json!(c.spec.limits.cpuset_cpus);
+    host["CpusetMems"] = json!(c.spec.limits.cpuset_mems);
+    host["OomKillDisable"] = json!(false);
+    for key in ["PidMode", "IpcMode", "UTSMode", "UsernsMode", "CgroupnsMode"] {
+        host[key] = c.spec.host_opts[key].as_str().unwrap_or_default().into();
+    }
+    result
+}
+
+// Endpoint identities are stable across daemon restarts and distinct per network.
+fn endpoint_id(network: &str, container: &str) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(format!("{network}/{container}")).iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn endpoint_mac(ip: Option<[u8; 4]>, requested: &str) -> String {
+    if ip.is_none() { return String::new(); }
+    if !requested.is_empty() { return requested.to_ascii_lowercase(); }
+    let a = ip.unwrap();
+    format!("02:42:{:02x}:{:02x}:{:02x}:{:02x}", a[0], a[1], a[2], a[3])
+}
+
+fn endpoint_mac_on(network: Option<&super::network::Network>, ip: Option<[u8; 4]>, requested: &str) -> String {
+    if let Some(n) = network.filter(|n| n.driver == "ipvlan" && ip.is_some()) {
+        let parent = n.options["parent"].as_str().unwrap_or(&n.bridge);
+        if let Ok(mac) = std::fs::read_to_string(format!("/sys/class/net/{parent}/address")) { return mac.trim().to_owned(); }
+    }
+    endpoint_mac(ip, requested)
 }
 
 fn network_settings(c: &Container, nets: &[super::network::Network]) -> Value {
@@ -1939,22 +2045,31 @@ fn network_settings(c: &Container, nets: &[super::network::Network]) -> Value {
     let v4_on = |name: &str| !nets.iter().any(|n| n.name == name && n.no_ipv4);
     let ip = c.ip.filter(|_| v4_on(&c.spec.network_mode)).map(super::network::ip_str).unwrap_or_default();
     let v6 = |name: &str, ip6: Option<[u8; 16]>| {
-        let n = nets.iter().find(|n| n.name == name).and_then(|n| n.v6.as_ref()).filter(|_| ip6.is_some());
+        let n = nets.iter().find(|n| n.name == name && n.options["com.docker.network.bridge.gateway_mode_ipv6"] != "isolated").and_then(|n| n.v6.as_ref()).filter(|_| ip6.is_some());
         (ip6.map(super::network::ip6_str).unwrap_or_default(), n.map_or(0, |v| v.prefix), n.map(|v| super::network::ip6_str(v.gateway)).unwrap_or_default())
     };
+    let metadata = |name: &str, address: Option<[u8; 4]>, mac: &str| {
+        let n = nets.iter().find(|n| n.name == name);
+        let network_id = n.map(|n| n.id.as_str()).unwrap_or_default();
+        let gateway = n.filter(|n| !n.no_ipv4 && address.is_some() && n.options["com.docker.network.bridge.gateway_mode_ipv4"] != "isolated").map(|n| super::network::ip_str(n.gateway)).unwrap_or_default();
+        (network_id.to_owned(), if address.is_some() { endpoint_id(network_id, &c.id) } else { String::new() }, gateway, endpoint_mac_on(n, address, mac))
+    };
+    let (network_id, endpoint, gateway, mac) = metadata(&c.spec.network_mode, c.ip, &c.spec.mac_address);
     let mut networks = serde_json::Map::new();
     let (ip6, prefix6, gateway6) = v6(&c.spec.network_mode, c.ip6);
     networks.insert(
         c.spec.network_mode.clone(),
-        json!({"IPAddress": ip, "IPPrefixLen": prefix_of(&c.spec.network_mode, !ip.is_empty()), "IPAMConfig": ipam_config(&c.spec.ipv4_address, &c.spec.ipv6_address), "Aliases": c.spec.aliases, "NetworkID": "", "MacAddress": c.spec.mac_address, "GlobalIPv6Address": ip6, "GlobalIPv6PrefixLen": prefix6, "IPv6Gateway": gateway6}),
+        json!({"IPAddress": ip, "IPPrefixLen": prefix_of(&c.spec.network_mode, !ip.is_empty()), "IPAMConfig": ipam_config(&c.spec.ipv4_address, &c.spec.ipv6_address), "Aliases": c.spec.aliases, "NetworkID": network_id, "EndpointID": endpoint, "Gateway": gateway, "MacAddress": mac, "GlobalIPv6Address": ip6, "GlobalIPv6PrefixLen": prefix6, "IPv6Gateway": gateway6}),
     );
     for x in &c.spec.extra_networks {
         let ip = c.extra_ips.iter().find(|(n, _)| *n == x.name).filter(|_| v4_on(&x.name)).map(|(_, ip)| super::network::ip_str(*ip)).unwrap_or_default();
         let prefix = prefix_of(&x.name, !ip.is_empty());
         let (xip6, xprefix6, xgateway6) = v6(&x.name, c.extra_ip6s.iter().find(|(n, _)| *n == x.name).map(|(_, a)| *a));
-        networks.insert(x.name.clone(), json!({"IPAddress": ip, "IPPrefixLen": prefix, "IPAMConfig": ipam_config(&x.ipv4_address, &x.ipv6_address), "Aliases": x.aliases, "NetworkID": "", "MacAddress": x.mac_address, "GlobalIPv6Address": xip6, "GlobalIPv6PrefixLen": xprefix6, "IPv6Gateway": xgateway6}));
+        let address = c.extra_ips.iter().find(|(n, _)| *n == x.name).map(|(_, ip)| *ip);
+        let (network_id, endpoint, gateway, mac) = metadata(&x.name, address, &x.mac_address);
+        networks.insert(x.name.clone(), json!({"IPAddress": ip, "IPPrefixLen": prefix, "IPAMConfig": ipam_config(&x.ipv4_address, &x.ipv6_address), "Aliases": x.aliases, "NetworkID": network_id, "EndpointID": endpoint, "Gateway": gateway, "MacAddress": mac, "GlobalIPv6Address": xip6, "GlobalIPv6PrefixLen": xprefix6, "IPv6Gateway": xgateway6}));
     }
-    json!({"IPAddress": ip, "IPPrefixLen": prefix_of(&c.spec.network_mode, !ip.is_empty()), "MacAddress": c.spec.mac_address, "GlobalIPv6Address": ip6, "GlobalIPv6PrefixLen": prefix6, "IPv6Gateway": gateway6, "Ports": ports_map(c), "Networks": networks})
+    json!({"IPAddress": ip, "IPPrefixLen": prefix_of(&c.spec.network_mode, !ip.is_empty()), "MacAddress": mac, "Gateway": gateway, "GlobalIPv6Address": ip6, "GlobalIPv6PrefixLen": prefix6, "IPv6Gateway": gateway6, "Ports": ports_map(c), "Networks": networks})
 }
 
 /// Docker's state word: `paused` is a running container that is frozen.
@@ -1976,12 +2091,17 @@ fn network_json(engine: &Engine, n: &super::network::Network, with_members: bool
     let mut containers = serde_json::Map::new();
     if with_members {
         for (id, name, ip, ip6) in engine.network_members(&n.name) {
+            let mac = engine.with(&id, |c| {
+                let requested = if c.spec.network_mode == n.name { c.spec.mac_address.as_str() }
+                    else { c.spec.extra_networks.iter().find(|x| x.name == n.name).map(|x| x.mac_address.as_str()).unwrap_or_default() };
+                endpoint_mac_on(Some(n), ip, requested)
+            }).unwrap_or_default();
             containers.insert(
                 id.clone(),
                 json!({
                     "Name": name,
-                    "EndpointID": id,
-                    "MacAddress": "",
+                    "EndpointID": if ip.is_some() { endpoint_id(&n.id, &id) } else { String::new() },
+                    "MacAddress": mac,
                     "IPv4Address": ip.filter(|_| !n.no_ipv4).map(|a| format!("{}/{}", super::network::ip_str(a), n.prefix)).unwrap_or_default(),
                     "IPv6Address": match (ip6, &n.v6) {
                         (Some(a), Some(v)) => format!("{}/{}", super::network::ip6_str(a), v.prefix),
@@ -2062,11 +2182,12 @@ fn network_create(req: &Request, engine: &Engine) -> Result<Value, Error> {
     let body: Value = serde_json::from_slice(&req.body).map_err(|e| Error::BadRequest(format!("invalid JSON: {e}")))?;
     let name = body["Name"].as_str().unwrap_or_default();
     match body["Driver"].as_str().unwrap_or("bridge") {
-        "" | "bridge" => {}
-        d => return Err(Error::BadRequest(format!("Kiri supports only bridge networks, not {d}"))),
+        "" | "bridge" | "macvlan" | "ipvlan" => {}
+        d => return Err(Error::BadRequest(format!("unsupported network driver {d}"))),
     }
     let (ipam, ipam6) = super::network::parse_ipam_both(&body["IPAM"]).map_err(Error::BadRequest)?;
     let settings = super::network::Settings {
+        driver: body["Driver"].as_str().unwrap_or("bridge").to_owned(),
         labels: body["Labels"].clone(),
         internal: body["Internal"].as_bool().unwrap_or(false),
         attachable: body["Attachable"].as_bool().unwrap_or(false),
@@ -2119,45 +2240,83 @@ fn wait(req: &Request, engine: &Engine, id: &str, w: &mut UnixStream) -> io::Res
 }
 
 fn attach(req: &Request, engine: &Arc<Engine>, key: &str, w: &mut UnixStream, r: &mut BufReader<UnixStream>) -> io::Result<Next> {
+    use super::websocket::Output;
+    use std::sync::atomic::{AtomicBool, Ordering};
     let (want_out, want_err, want_in) = (req.flag("stdout"), req.flag("stderr"), req.flag("stdin"));
-    let (id, tty, rx) = match engine.attach(key) {
-        Ok(v) => v,
-        Err(e) => {
-            error(w, e)?;
-            return Ok(Next::KeepAlive);
-        }
+    let keys = match super::detach::Keys::parse(req.query("detachKeys")) {
+        Ok(keys) => keys,
+        Err(message) => { http::error(w, 400, message)?; return Ok(Next::KeepAlive); }
     };
+    let (id, tty) = match engine.with(key, |c| (c.id.clone(), c.spec.tty)) {
+        Ok(v) => v,
+        Err(e) => { error(w, e)?; return Ok(Next::KeepAlive); }
+    };
+    let output = if req.flag("logs") {
+        match engine.logs(&id, req.flag("stream")) {
+            Ok(Some(logs)) => Output::Logs(logs),
+            Ok(None) => { http::error(w, 501, "configured logging driver does not support reading")?; return Ok(Next::KeepAlive); }
+            Err(e) => { error(w, e)?; return Ok(Next::KeepAlive); }
+        }
+    } else if req.flag("stream") {
+        match engine.attach(&id) {
+            Ok((_, _, rx)) => Output::Live(rx),
+            Err(e) => { error(w, e)?; return Ok(Next::KeepAlive); }
+        }
+    } else { Output::Empty };
+    let stopped = Arc::new(AtomicBool::new(false));
     http::upgrade(w)?;
-    if want_in {
+    if want_in && req.flag("stream") {
         let close = engine.with(&id, |c| c.spec.stdin_once && !c.spec.tty).unwrap_or(false);
-        forward_stdin(engine.clone(), id, r, close)?;
+        forward_stdin(engine.clone(), id, r, close, tty.then_some(keys), Some(stopped.clone()))?;
     }
-    pump(rx, tty, want_out, want_err, w)?;
-    let _ = w.shutdown(std::net::Shutdown::Write);
+    let mut result = Ok(());
+    output.pump(&stopped, |stream, data| {
+        let wanted = match stream { Stream::Stdout => want_out, Stream::Stderr => want_err };
+        if !wanted { return Ok(()); }
+        let sent = if tty { io::Write::write_all(w, data) } else { http::mux_frame(w, stream as u8, data) };
+        if let Err(e) = sent { result = Err(e); return Err(io::Error::new(io::ErrorKind::BrokenPipe, "attach closed")); }
+        Ok(())
+    });
+    stopped.store(true, Ordering::Relaxed);
+    let _ = w.shutdown(std::net::Shutdown::Both);
+    result?;
     Ok(Next::Close)
 }
 
 /// Copies the client's side of a hijacked connection into the process's
 /// stdin, on its own thread, ending with CloseStdin at EOF.
-fn forward_stdin(engine: Arc<Engine>, id: String, r: &mut BufReader<UnixStream>, close: bool) -> io::Result<()> {
+fn forward_stdin(engine: Arc<Engine>, id: String, r: &mut BufReader<UnixStream>, close: bool, mut keys: Option<super::detach::Keys>, stopped: Option<Arc<std::sync::atomic::AtomicBool>>) -> io::Result<()> {
     // Anything the client sent right behind the request is already buffered.
     let early = r.buffer().to_vec();
     let mut stream = r.get_ref().try_clone()?;
     std::thread::Builder::new().name("kiri-stdin".into()).spawn(move || {
-        if !early.is_empty() && engine.input(&id, &early).is_err() {
-            return;
-        }
+        let cancel = stream.try_clone().ok();
+        let mut send = |data: &[u8]| -> bool {
+            let Some(keys) = &mut keys else { return data.is_empty() || engine.input(&id, data).is_ok(); };
+            let (bytes, detached) = keys.feed(data);
+            if !bytes.is_empty() && engine.input(&id, &bytes).is_err() { return false; }
+            if detached {
+                if let Some(stop) = &stopped { stop.store(true, std::sync::atomic::Ordering::Relaxed); }
+                if let Some(cancel) = &cancel { let _ = cancel.shutdown(std::net::Shutdown::Both); }
+                return false;
+            }
+            true
+        };
+        if !send(&early) { return; }
         let mut buf = vec![0u8; 32 * 1024];
         loop {
             wait_readable(&stream);
             match io::Read::read(&mut stream, &mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if engine.input(&id, &buf[..n]).is_err() {
-                        return;
-                    }
+                    if !send(&buf[..n]) { return; }
                 }
             }
+        }
+        drop(send);
+        if let Some(keys) = &mut keys {
+            let pending = keys.finish();
+            if !pending.is_empty() { let _ = engine.input(&id, &pending); }
         }
         if close {
             let _ = engine.close_stdin(&id);
@@ -2259,7 +2418,7 @@ fn exec_start(req: &Request, engine: &Arc<Engine>, id: &str, w: &mut UnixStream,
     }
     http::upgrade(w)?;
     if stdin {
-        forward_stdin(engine.clone(), id.to_owned(), r, true)?;
+        forward_stdin(engine.clone(), id.to_owned(), r, true, None, None)?;
     }
     pump(rx, tty, true, true, w)?;
     let _ = w.shutdown(std::net::Shutdown::Write);
@@ -2608,12 +2767,12 @@ mod tests {
         };
         let value = json!({"PidsLimit": -1, "CpuQuota": -1});
         validate_limits(&value).unwrap();
-        let updated = limits_from(&value, base);
+        let updated = limits_from(&value, base.clone());
         assert_eq!(updated.pids_max, 0);
         assert_eq!(updated.cpu_quota, 0);
         assert_eq!(updated.memory_max, base.memory_max);
         assert_eq!(updated.cpu_period, base.cpu_period);
-        assert_eq!(limits_from(&json!({"PidsLimit": 0}), base).pids_max, 0);
+        assert_eq!(limits_from(&json!({"PidsLimit": 0}), base.clone()).pids_max, 0);
         assert_eq!(limits_from(&json!({}), base).pids_max, 32);
     }
 

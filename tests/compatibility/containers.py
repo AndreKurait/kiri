@@ -169,7 +169,7 @@ class Engine:
             assert error.get("message"), error
         assert self.inspect(cid)["HostConfig"]["RestartPolicy"]["Name"] == "no"
 
-    def websocket_attach(self, stdin_once=False):
+    def websocket_attach(self, stdin_once=False, version=48):
         cid = self.create(["cat"], OpenStdin=True, StdinOnce=stdin_once)
         self.request("POST", f"/containers/{cid}/start", status=204)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -177,7 +177,9 @@ class Engine:
         try:
             sock.connect(self.path)
             key = base64.b64encode(os.urandom(16)).decode()
-            path = f"/v1.48/containers/{cid}/attach/ws?stdin=1&stdout=1&stderr=1&stream=1"
+            path = f"/v1.{version}/containers/{cid}/attach/ws?stream=1"
+            if version >= 42:
+                path += "&stdin=1&stdout=1&stderr=1"
             sock.sendall((f"GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\n"
                           f"Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n\r\n").encode())
             with sock.makefile("rb") as response:
@@ -194,7 +196,7 @@ class Engine:
                 output = b""
                 while len(output) < len(data):
                     first, length = response.read(2)
-                    assert first & 0xf == 2, first
+                    assert first & 0xf == (2 if version >= 28 else 1), first
                     assert not length & 0x80
                     if length == 126:
                         length = struct.unpack("!H", response.read(2))[0]
@@ -267,6 +269,177 @@ class Engine:
         self.request("POST", f"/networks/{n2}/disconnect", {"Container": cid})
         assert name2 not in self.inspect(cid)["NetworkSettings"]["Networks"]
 
+    def exec_capture(self, cid, command):
+        import io
+        import tarfile
+        path = "/tmp/compat-" + uuid.uuid4().hex
+        eid = self.request("POST", f"/containers/{cid}/exec", {
+            "Cmd": ["sh", "-c", "(" + command + ") > " + path + " 2>&1"],
+        }, 201)["Id"]
+        self.request("POST", f"/exec/{eid}/start", {"Detach": True})
+        for _ in range(500):
+            state = self.request("GET", f"/exec/{eid}/json")
+            if not state["Running"]:
+                break
+            time.sleep(.02)
+        assert not state["Running"], "exec did not exit"
+        data = self.request("GET", f"/containers/{cid}/archive?path=" + path, raw=True)
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            output = tar.extractfile(tar.getmembers()[0]).read()
+        return state["ExitCode"], output
+
+    def advanced_resources(self):
+        cpu = min(os.sched_getaffinity(0))
+        mems = open("/sys/fs/cgroup/cpuset.mems.effective").read().strip().split(",")[0].split("-")[0]
+        cid = self.create(host={"NetworkMode": "none", "Memory": 67108864, "MemorySwap": 100663296,
+                                "MemoryReservation": 16777216, "CpusetCpus": str(cpu), "CpusetMems": mems})
+        self.request("POST", f"/containers/{cid}/start", status=204)
+        command = "cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/memory.low /sys/fs/cgroup/cpuset.cpus /sys/fs/cgroup/cpuset.mems"
+        code, output = self.exec_capture(cid, command)
+        assert code == 0 and output.decode().splitlines() == ["67108864", "33554432", "16777216", str(cpu), mems], (code, output)
+        self.request("POST", f"/containers/{cid}/update", {"Memory": 67108864, "MemorySwap": 134217728, "MemoryReservation": 8388608})
+        code, output = self.exec_capture(cid, command)
+        assert code == 0 and output.decode().splitlines()[:3] == ["67108864", "67108864", "8388608"], (code, output)
+        unlimited = self.create(host={"NetworkMode": "none", "Memory": 67108864, "MemorySwap": -1})
+        self.request("POST", f"/containers/{unlimited}/start", status=204)
+        assert self.exec_capture(unlimited, "cat /sys/fs/cgroup/memory.swap.max") == (0, b"max\n")
+        old = self.inspect(cid)["HostConfig"]
+        self.request("POST", f"/containers/{cid}/update", {"Memory": 67108864, "MemorySwap": 1}, 400)
+        assert self.inspect(cid)["HostConfig"]["MemorySwap"] == old["MemorySwap"]
+
+    def endpoint_metadata(self):
+        nid = self.network("-metadata", EnableIPv6=True)
+        network = self.request("GET", f"/networks/{nid}")
+        name = network["Name"]
+        cid = self.create(host={"NetworkMode": name})
+        self.request("POST", f"/containers/{cid}/start", status=204)
+        endpoint = self.inspect(cid)["NetworkSettings"]["Networks"][name]
+        member = self.request("GET", f"/networks/{nid}")["Containers"][cid]
+        assert endpoint["NetworkID"] == nid, endpoint
+        assert len(endpoint["EndpointID"]) == 64 and endpoint["EndpointID"] == member["EndpointID"], (endpoint, member)
+        assert endpoint["Gateway"] and endpoint["MacAddress"] == member["MacAddress"], (endpoint, member)
+        code, output = self.exec_capture(cid, "cat /sys/class/net/eth0/address; ip route")
+        assert code == 0 and endpoint["MacAddress"].encode() in output and endpoint["Gateway"].encode() in output, output
+
+    def http_attach_controls(self):
+        cid, _ = self.run(["printf", "attach-history"])
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(10)
+        try:
+            sock.connect(self.path)
+            path = f"/v1.48/containers/{cid}/attach?logs=1&stream=0&stdout=1&stderr=1"
+            sock.sendall((f"POST {path} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: 0\r\n\r\n").encode())
+            response = b""
+            while True:
+                data = sock.recv(65536)
+                if not data: break
+                response += data
+            assert b"attach-history" in response, response
+        finally:
+            sock.close()
+        cid = self.create(["cat"], OpenStdin=True, Tty=True)
+        self.request("POST", f"/containers/{cid}/start", status=204)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(10)
+        try:
+            sock.connect(self.path)
+            path = f"/v1.48/containers/{cid}/attach?stream=1&stdin=1&stdout=1&detachKeys=ctrl-a,ctrl-b"
+            sock.sendall((f"POST {path} HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Length: 0\r\n\r\n").encode())
+            response = b""
+            while b"\r\n\r\n" not in response: response += sock.recv(4096)
+            sock.sendall(bytes([1])); time.sleep(.05); sock.sendall(bytes([2]))
+            assert sock.recv(4096) == b"", "detach did not close stream"
+        finally:
+            sock.close()
+        assert self.inspect(cid)["State"]["Running"], "detach stopped the process"
+
+    def namespace_modes(self):
+        cid = self.create(host={"NetworkMode": "none", "PidMode": "host", "IpcMode": "host", "UTSMode": "host", "CgroupnsMode": "host", "UsernsMode": "host"})
+        self.request("POST", f"/containers/{cid}/start", status=204)
+        code, output = self.exec_capture(cid, "for ns in pid ipc uts cgroup; do readlink /proc/self/ns/$ns; done")
+        expected = [os.readlink("/proc/self/ns/" + ns) for ns in ["pid", "ipc", "uts", "cgroup"]]
+        assert code == 0 and output.decode().splitlines() == expected, (code, output, expected)
+        parent = self.create(host={"NetworkMode": "none", "IpcMode": "shareable"})
+        self.request("POST", f"/containers/{parent}/start", status=204)
+        assert self.exec_capture(parent, "printf shared > /dev/shm/compat")[0] == 0
+        child = self.create(host={"NetworkMode": "none", "PidMode": "container:" + parent, "IpcMode": "container:" + parent})
+        self.request("POST", f"/containers/{child}/start", status=204)
+        for ns in ["pid", "ipc"]:
+            assert self.exec_capture(child, "readlink /proc/self/ns/" + ns) == self.exec_capture(parent, "readlink /proc/self/ns/" + ns)
+        assert self.exec_capture(child, "cat /dev/shm/compat") == (0, b"shared")
+
+    def custom_seccomp(self):
+        profile = {"defaultAction": "SCMP_ACT_ALLOW", "syscalls": [{"names": ["mkdir", "mkdirat"], "action": "SCMP_ACT_ERRNO", "errnoRet": 13}]}
+        cid = self.create(host={"NetworkMode": "none", "SecurityOpt": ["seccomp=" + json.dumps(profile)]})
+        self.request("POST", f"/containers/{cid}/start", status=204)
+        code, output = self.exec_capture(cid, "mkdir /tmp/denied")
+        assert code != 0 and b"Permission denied" in output, (code, output)
+
+    def bridge_options(self):
+        nid = self.network("-mtu", Options={"com.docker.network.driver.mtu": "1400", "com.docker.network.bridge.enable_icc": "false",
+                                            "com.docker.network.bridge.host_binding_ipv4": "127.0.0.1", "com.docker.network.bridge.enable_ip_masquerade": "false"})
+        name = self.request("GET", f"/networks/{nid}")["Name"]
+        one = self.create(host={"NetworkMode": name, "PortBindings": {"8080/tcp": [{"HostPort": "0"}]}}, ExposedPorts={"8080/tcp": {}})
+        two = self.create(host={"NetworkMode": name})
+        for cid in [one, two]: self.request("POST", f"/containers/{cid}/start", status=204)
+        assert self.exec_capture(one, "cat /sys/class/net/eth0/mtu") == (0, b"1400\n")
+        binding = self.inspect(one)["NetworkSettings"]["Ports"]["8080/tcp"]
+        assert all(b["HostIp"] == "127.0.0.1" for b in binding), binding
+        address = self.inspect(two)["NetworkSettings"]["Networks"][name]["IPAddress"]
+        assert self.exec_capture(one, "ping -c 1 -W 1 " + address)[0] != 0, "ICC=false allowed peer traffic"
+
+    def source_nat(self):
+        import urllib.request
+        peer = os.environ["KIRI_TEST_PEER"]
+        for enabled in [True, False]:
+            nid = self.network("-nat-" + str(enabled), Options={"com.docker.network.bridge.enable_ip_masquerade": str(enabled).lower()})
+            name = self.request("GET", f"/networks/{nid}")["Name"]
+            cid = self.create(host={"NetworkMode": name})
+            self.request("POST", f"/containers/{cid}/start", status=204)
+            address = self.inspect(cid)["NetworkSettings"]["Networks"][name]["IPAddress"]
+            token = uuid.uuid4().hex
+            self.exec_capture(cid, "printf " + token + " | nc -u -w 1 " + peer + " 9000")
+            observed = None
+            for _ in range(50):
+                with urllib.request.urlopen("http://" + peer + ":8000/" + token, timeout=5) as response:
+                    observed = json.load(response)
+                if observed: break
+                time.sleep(.02)
+            assert observed, "external observer received no packet"
+            assert (observed != address) == enabled, (enabled, address, observed)
+
+    def routed_network(self):
+        nid = self.network("-routed", Options={"com.docker.network.bridge.gateway_mode_ipv4": "routed"})
+        name = self.request("GET", f"/networks/{nid}")["Name"]
+        command = "while true; do printf 'HTTP/1.0 200 OK\\r\\nContent-Length: 6\\r\\n\\r\\nrouted' | nc -l -p 8080; done"
+        server = self.create(["sh", "-c", command], host={"NetworkMode": name, "PortBindings": {"8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "0"}]}}, ExposedPorts={"8080/tcp": {}})
+        self.request("POST", f"/containers/{server}/start", status=204)
+        details = self.inspect(server)["NetworkSettings"]
+        assert details["Ports"]["8080/tcp"] == [{"HostIp": "0.0.0.0", "HostPort": ""}], details["Ports"]
+        other = self.network("-routed-client")
+        client = self.create(host={"NetworkMode": self.request("GET", f"/networks/{other}")["Name"]})
+        self.request("POST", f"/containers/{client}/start", status=204)
+        address = details["Networks"][name]["IPAddress"]
+        code, output = self.exec_capture(client, "wget -qO- -T 3 http://" + address + ":8080/")
+        assert code == 0 and b"routed" in output, (code, output)
+
+    def direct_driver(self, driver):
+        nid = self.network("-" + driver, Driver=driver, EnableIPv6=True, IPAM={"Config": [{"Subnet": "10.232." + ("44" if driver == "macvlan" else "45") + ".0/24"}, {"Subnet": "fd42:cafe:" + ("44" if driver == "macvlan" else "45") + "::/64"}]})
+        name = self.request("GET", f"/networks/{nid}")["Name"]
+        one, two = [self.create(host={"NetworkMode": name}) for _ in range(2)]
+        for cid in [one, two]: self.request("POST", f"/containers/{cid}/start", status=204)
+        address = self.inspect(two)["NetworkSettings"]["Networks"][name]["IPAddress"]
+        result = self.exec_capture(one, "ping -c 1 -W 2 " + address)
+        assert result[0] == 0, result
+        address6 = self.inspect(two)["NetworkSettings"]["Networks"][name]["GlobalIPv6Address"]
+        result = self.exec_capture(one, "ping -6 -c 1 -W 2 " + address6)
+        assert result[0] == 0, result
+        for cid in [one, two]:
+            self.request("DELETE", f"/containers/{cid}?force=1", status=204)
+            self.containers.remove(cid)
+        self.request("DELETE", f"/networks/{nid}", status=204)
+        self.networks.remove(nid)
+
     def benchmark(self, samples, concurrency):
         def once(_):
             started = time.perf_counter()
@@ -306,11 +479,23 @@ def main():
             value = json.loads(line)
             assert "error" not in value, value
         for name, fn in [
+            ("advanced-resource-controls", engine.advanced_resources),
+            ("endpoint-metadata", engine.endpoint_metadata),
+            ("http-attach-controls", engine.http_attach_controls),
+            ("namespace-modes", engine.namespace_modes),
+            ("custom-seccomp", engine.custom_seccomp),
+            ("bridge-options", engine.bridge_options),
+            ("source-nat-toggle", engine.source_nat),
+            ("routed-network", engine.routed_network),
+            ("macvlan", lambda: engine.direct_driver("macvlan")),
+            ("ipvlan", lambda: engine.direct_driver("ipvlan")),
             ("container-lifecycle", engine.lifecycle),
             ("pause-restart-detached-exec", engine.pause_restart_exec),
             ("resource-limit-reset", engine.resource_reset),
             ("invalid-updates-do-not-mutate", engine.invalid_updates),
             ("websocket-attach-roundtrip", engine.websocket_attach),
+            ("websocket-legacy-text", lambda: engine.websocket_attach(version=27)),
+            ("websocket-legacy-stream-defaults", lambda: engine.websocket_attach(version=41)),
             ("websocket-stdin-once", lambda: engine.websocket_attach(True)),
             ("ipv4-static-address", lambda: engine.addressing(True, False)),
             ("dual-stack-static-address", lambda: engine.addressing(True, True)),

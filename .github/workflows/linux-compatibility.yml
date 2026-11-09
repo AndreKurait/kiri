@@ -27,6 +27,11 @@ jobs:
         # Build musl binaries for the Alpine-based disposable runtime. A host
         # glibc binary would fail to start there before any test could run.
         run: cargo xtask linux --arch amd64
+      - name: Test native Linux agent
+        run: |
+          docker run --rm --privileged --tmpfs /tmp -v "$PWD:/src" -v kiri-cargo-amd64:/usr/local/cargo/registry -w /src \
+            -e CARGO_TARGET_DIR=/src/target/linux-x86_64 rust:1-alpine sh -c \
+            'apk add -q musl-dev libseccomp-dev libseccomp-static && cargo test --locked -p kiri-init'
       - name: Compare disposable Linux engines
         env:
           KIRI_BIN_DIR: ${{ github.workspace }}/target/linux-x86_64/release

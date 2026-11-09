@@ -353,7 +353,7 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                     container::spawn(
                     &spec,
                     paths,
-                    NetCtx { bridges: &mut bridges, dns: &mut dns, upstream_dns: dhcp.as_ref().and_then(|d| d.lease.as_ref()).map_or(&host_dns[..], |l| &l.dns), join_pid },
+                    NetCtx { namespace_pid: &|id| running_pid(&procs, id), bridges: &mut bridges, dns: &mut dns, upstream_dns: dhcp.as_ref().and_then(|d| d.lease.as_ref()).map_or(&host_dns[..], |l| &l.dns), join_pid },
                 )
                 } {
                     Ok(run) => {
@@ -488,7 +488,7 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                     continue;
                 }
                 Ok(Msg::Update { id, limits }) => match running_pid(&procs, id) {
-                    Some(_) => match super::cgroup::apply_limits(&paths.cgroup.join(id), &limits) {
+                    Some(_) => match super::cgroup::update_limits(&paths.cgroup.join(id), &limits) {
                         Ok(()) => Msg::Ack.encode(&mut out),
                         Err(e) => Msg::Error(&format!("update: {e}")).encode(&mut out),
                     },
@@ -530,7 +530,7 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                         let v6 = net::Ip6::from_opts(n.opts);
                         let plug = net::Plug::from_opts(n.opts);
                         let attached = net::attach(&mut bridges, n.bridge, &host_if, pid, num, n.ip, n.prefix, n.gateway, mac, v6, plug)
-                            .and_then(|()| if plug.no_ipv4 { Ok(()) } else { dns.serve(n.bridge, n.gateway) })
+                            .and_then(|()| if plug.no_ipv4 || matches!(plug.driver, "macvlan" | "ipvlan") || net::policy(n.bridge).mode4 == 3 { Ok(()) } else { dns.serve(n.bridge, n.gateway) })
                             .and_then(|()| std::fs::File::open(format!("/proc/{pid}/ns/net")).and_then(|ns| dns.serve_in(&ns, pid, n.ip, n.bridge)));
                         match attached {
                             Ok(()) => {
@@ -569,7 +569,12 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                             p.run.dns_entries.retain(|(b, a)| !(b == bridge && *a == ip));
                             p.run.veths.retain(|v| *v != host_if);
                         }
-                        match net::detach(&host_if) {
+                        let detached = std::fs::File::open(format!("/proc/{pid}/ns/net")).and_then(|ns| super::netlink::in_netns(&ns, || {
+                            let mut nl = super::netlink::Netlink::open(libc::NETLINK_ROUTE)?;
+                            super::netlink::delete_link(&mut nl, ifname)
+                        }));
+                        let detached = detached.and_then(|()| net::forget_endpoint(&mut bridges, &host_if));
+                        match detached {
                             Ok(()) => Msg::Ack.encode(&mut out),
                             Err(e) => Msg::Error(&format!("disconnect: {e}")).encode(&mut out),
                         }
