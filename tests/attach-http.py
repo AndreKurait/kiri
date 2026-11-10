@@ -37,17 +37,18 @@ def request(path, method, url, body=None, expected=200):
 
 
 def output(data, tty):
+    """Returns what arrived as (stdout, stderr). A terminal has one stream."""
     if tty:
-        return data
-    result = bytearray()
+        return data, b""
+    streams = {1: bytearray(), 2: bytearray()}
     while data:
         assert len(data) >= 8, data
         stream, length = data[0], struct.unpack(">I", data[4:8])[0]
-        assert stream in (1, 2) and data[1:4] == b"\0\0\0", data[:8]
+        assert stream in streams and data[1:4] == b"\0\0\0", data[:8]
         assert len(data) >= 8 + length, data
-        result.extend(data[8:8 + length])
+        streams[stream].extend(data[8:8 + length])
         data = data[8 + length:]
-    return bytes(result)
+    return bytes(streams[1]), bytes(streams[2])
 
 
 def check(path, image, headers, status, tty, attach, stdin):
@@ -92,8 +93,12 @@ def check(path, image, headers, status, tty, attach, stdin):
                 assert response.fp.read(5) == b"ready", "Wait until the terminal has echo disabled"
             writer.sendall(b"out\n")
         # Read the hijacked 101 stream as well as the close-delimited 200 body.
-        data = output(response.fp.read(), tty)
-        assert data in (b"outerr", b"errout"), data
+        stdout, stderr = output(response.fp.read(), tty)
+        if tty:
+            assert stdout in (b"outerr", b"errout"), stdout
+        else:
+            # Each stream arrives under its own frame type.
+            assert (stdout, stderr) == (b"out", b"err"), (stdout, stderr)
     finally:
         if writer is not None:
             writer.close()

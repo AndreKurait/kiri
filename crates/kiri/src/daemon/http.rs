@@ -432,7 +432,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn strips_api_version() {
         assert_eq!(strip_version("/v1.47/containers/json"), "/containers/json");

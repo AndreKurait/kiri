@@ -81,8 +81,6 @@ t version-api "1.47" $D version --format '{{.Server.APIVersion}}'
 t info-os "Kiri" $D info --format '{{.OperatingSystem}}'
 t info-cgroup "2" $D info --format '{{.CgroupVersion}}'
 
-code attach-http-negotiation 0 python3 "$(dirname "$0")/attach-http.py" "$SOCK"
-
 section "images"
 t pull-alpine "alpine:latest" $D pull alpine:latest
 t pull-busybox "busybox" $D pull busybox
@@ -134,6 +132,8 @@ t node "v22" $D run --rm node:22-alpine node -v
 t debian-image "Valkey server" $D run --rm valkey/valkey valkey-server --version
 
 section "stdin and terminals"
+# After the pulls above: the script uses the alpine image and does not pull it.
+code attach-http-negotiation 0 python3 "$(dirname "$0")/attach-http.py" "$SOCK"
 t stdin-pipe "3" bash -c "printf 'a\nb\nc\n' | $D run -i --rm alpine wc -l"
 t stdin-cat "round trip" bash -c "echo 'round trip' | $D run -i --rm alpine cat"
 t stdin-large "1000000" bash -c "head -c 1000000 /dev/zero | $D run -i --rm alpine wc -c"
