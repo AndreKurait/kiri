@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      benchmark:
+        description: Run the pinned Floci Lambda, Redis, and PostgreSQL benchmark
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -11,6 +16,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   compatibility:
+    if: ${{ !inputs.benchmark }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -53,4 +59,51 @@ jobs:
           path: |
             target/compatibility
             target/floci-benchmark
+          if-no-files-found: ignore
+  benchmark:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check out the validated Floci source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: AndreKurait/floci
+          ref: e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39
+          path: target/floci-source
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          java-version: "25"
+          distribution: temurin
+          cache: maven
+          cache-dependency-path: target/floci-source/pom.xml
+      - name: Build the validated JVM application
+        working-directory: target/floci-source
+        run: |
+          ./mvnw package -Dmaven.test.skip=true -B -ntp
+          docker build -f docker/Dockerfile.jvm-package -t floci-runtime-benchmark:validated .
+      - name: Build native Linux engine and agent
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          cargo xtask linux --arch amd64
+      - name: Measure both engines sequentially on the same two CPUs
+        env:
+          KIRI_BIN_DIR: ${{ github.workspace }}/target/linux-x86_64/release
+          FLOCI_IMAGE: floci-runtime-benchmark:validated
+          FLOCI_LOCAL_IMAGE: "1"
+          FLOCI_CPUSET: "0,1"
+          FLOCI_SAMPLES: "20"
+          FLOCI_SERVICE_SAMPLES: "10"
+        run: bash tests/compatibility/floci.sh
+      - name: Preserve benchmark samples and environment
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: floci-runtime-benchmark
+          path: target/floci-benchmark
           if-no-files-found: ignore
