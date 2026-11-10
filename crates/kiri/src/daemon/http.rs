@@ -382,6 +382,18 @@ pub fn upgrade(w: &mut impl Write) -> io::Result<()> {
     w.flush()
 }
 
+/// A raw attach stream for clients that did not request an HTTP upgrade.
+/// It ends with the connection, so there is no Content-Length or chunking.
+pub fn raw_stream(req: &Request, w: &mut impl Write) -> io::Result<()> {
+    if req.header("Upgrade").is_some_and(|v| v.eq_ignore_ascii_case("tcp"))
+        && req.header("Connection").is_some_and(|v| v.split(',').any(|token| token.trim().eq_ignore_ascii_case("upgrade")))
+    {
+        return upgrade(w);
+    }
+    head(w, 200, "Content-Type: application/vnd.docker.raw-stream\r\nConnection: close\r\n")?;
+    w.flush()
+}
+
 /// Docker's multiplexed stream framing: `[stream, 0, 0, 0, len u32 BE] data`.
 pub fn mux_frame(w: &mut impl Write, stream: u8, data: &[u8]) -> io::Result<()> {
     let mut header = [0u8; 8];

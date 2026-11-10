@@ -50,10 +50,15 @@ pub fn state_dir() -> io::Result<PathBuf> {
     Ok(home.join(crate::flavor::STATE.get()))
 }
 
-/// `~/.kiri/run/docker.sock`, beside OrbStack's `~/.orbstack/run/docker.sock`.
+/// Root on Linux uses `/run/kiri/docker.sock`; other users use their home.
 pub fn socket_path() -> io::Result<PathBuf> {
     if let Some(s) = std::env::var_os("KIRI_SOCKET") {
         return Ok(PathBuf::from(s));
+    }
+    #[cfg(target_os = "linux")]
+    // SAFETY: geteuid cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        return Ok(PathBuf::from("/run/kiri/docker.sock"));
     }
     let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| io::Error::other("HOME is not set"))?;
     Ok(home.join(crate::flavor::STATE.get()).join("run/docker.sock"))
@@ -94,11 +99,14 @@ pub fn run(_args: &[String]) -> io::Result<()> {
     let _ = std::fs::remove_file(&socket); // stale, from a daemon that died
     let listener = UnixListener::bind(&socket)?;
     std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
-    // On a Linux host the daemon runs as root; `KIRI_SOCKET_GROUP=kiri`
-    // lets that group's users in, as the docker group does for dockerd.
+    // An explicit group keeps Kiri's managed membership policy. Without an
+    // override, root on Linux uses ordinary Unix group access, like dockerd:
+    // container users need not exist in the host's account database.
     let access_group = std::env::var_os("KIRI_SOCKET_GROUP");
     if let Some(group) = &access_group {
         socket_group(&socket, group)?;
+    } else {
+        default_socket_access(&socket)?;
     }
     // Each member by name too, so one just added needn't sign in again; and
     // connections are checked against the group when made and while open, so
@@ -241,6 +249,25 @@ fn finder(engine: &std::sync::Arc<engine::Engine>) {
         Ok(socket) => diag::info!("container files over NFS", at = socket.display()),
         Err(e) => diag::warn!("container files off", error = e),
     }
+}
+
+/// Docker-compatible permissions for a root-run Linux daemon.
+fn default_socket_access(socket: &std::path::Path) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    // SAFETY: geteuid cannot fail.
+    if unsafe { libc::geteuid() } == 0 {
+        match socket_group(socket, std::ffi::OsStr::new("docker")) {
+            Ok(()) => return Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                // Minimal Linux installations may have no docker group.
+                // Keep the socket's existing group, but permit group access.
+                return std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o660));
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    let _ = socket;
+    Ok(())
 }
 
 /// Gives `group` read-write access to the socket.
