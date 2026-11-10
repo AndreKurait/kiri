@@ -90,7 +90,9 @@ The service probes verify Redis PING/SET/GET and a PostgreSQL table, insert, and
 query before deleting the resources.
 
 Run `gh workflow run linux-compatibility.yml --ref <branch> -f benchmark=true`
-on a branch containing this workflow version. The `floci-runtime-benchmark`
+on a branch containing this workflow version. The optional `floci_ref` input
+selects another Floci commit for a follow-up; the resolved commit is recorded
+in `floci-source.txt`. The `floci-runtime-benchmark`
 artifact contains raw samples, image identities, binary hashes, CPU affinity,
 and daemon/application logs. Normal compatibility CI keeps its short Lambda
 smoke test. Inspect artifact completeness and matching image IDs before

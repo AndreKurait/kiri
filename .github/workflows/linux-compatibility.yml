@@ -9,6 +9,10 @@ on:
         description: Run the pinned Floci Lambda, Redis, and PostgreSQL benchmark
         type: boolean
         default: false
+      floci_ref:
+        description: Floci commit or ref to benchmark
+        type: string
+        default: e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39
 permissions:
   contents: read
 concurrency:
@@ -72,7 +76,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: AndreKurait/floci
-          ref: e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39
+          ref: ${{ inputs.floci_ref }}
           path: target/floci-source
           persist-credentials: false
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
@@ -86,6 +90,10 @@ jobs:
         run: |
           ./mvnw package -Dmaven.test.skip=true -B -ntp
           docker build -f docker/Dockerfile.jvm-package -t floci-runtime-benchmark:validated .
+      - name: Record the measured Floci revision
+        run: |
+          mkdir -p target/floci-benchmark
+          git -C target/floci-source rev-parse HEAD > target/floci-benchmark/floci-source.txt
       - name: Build native Linux engine and agent
         run: |
           rustup update stable --no-self-update
