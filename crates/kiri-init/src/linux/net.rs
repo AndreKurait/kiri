@@ -648,11 +648,13 @@ pub fn attach_container(
     attach(bridges, bridge, host_ifname, pid, 0, ip, prefix, gateway, mac, v6, plug)
 }
 
-/// Plugs the container into `bridge` as `eth{n}`. Only `eth0` gets the
-/// default route; more networks add their subnets, as with Docker. The
-/// first network with IPv6 gives the IPv6 default route. An `internal`
-/// network gives no default route at all, so traffic beyond it fails at
-/// once (unreachable), as with Docker. On a network without IPv6 the
+/// Plugs the container into `bridge` as `eth{n}`. The first network with a
+/// way out gives the default route, for IPv4 and for IPv6 each; more
+/// networks add their subnets. (Docker picks among several by name, and
+/// moves the route when a network that sorts earlier joins.) An `internal`
+/// network gives no default route at all: a container on nothing else has
+/// traffic beyond it fail at once (unreachable), and one that joins a
+/// routed network later goes out through that, as with Docker. On a network without IPv6 the
 /// interface has IPv6 off (no link-local address), as Docker does. On an
 /// IPv6-only network `ip` is only the name the container is kept by (its
 /// MAC is made from it): neither the interface nor the bridge gets it.
@@ -683,8 +685,12 @@ pub fn attach(bridges: &mut Bridges, bridge: &str, host_ifname: &str, pid: libc:
         netlink::add_address6(&mut inner, index, v.ip, v.prefix)?;
     }
     netlink::set_up(&mut inner, index)?;
-    if n == 0 && !internal && !no_ipv4 {
-        netlink::add_default_route(&mut inner, index, gateway)?;
+    if !internal && !no_ipv4 {
+        if n == 0 {
+            netlink::add_default_route(&mut inner, index, gateway)?;
+        } else if gateway != [0; 4] {
+            netlink::add_default_route_if_none(&mut inner, index, gateway)?;
+        }
     }
     if let Some(v) = v6.filter(|_| !internal) {
         netlink::add_default_route6(&mut inner, index, v.gateway)?;
@@ -719,6 +725,47 @@ fn delete_retired(nl: &mut Netlink) {
 pub fn detach(host_ifname: &str) -> io::Result<()> {
     let mut host = Netlink::open(libc::NETLINK_ROUTE)?;
     netlink::delete_link(&mut host, host_ifname)
+}
+
+/// An extra network of a container that has a way out: its interface in
+/// the container and its gateways.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WayOut {
+    pub ifname: String,
+    pub gateway: Option<[u8; 4]>,
+    pub gateway6: Option<[u8; 16]>,
+}
+
+impl WayOut {
+    /// None for a network that gives no default route (see `attach`).
+    pub fn of(ifname: &str, gateway: [u8; 4], v6: Option<Ip6>, plug: Plug) -> Option<WayOut> {
+        let gateway = (!plug.no_ipv4 && gateway != [0; 4]).then_some(gateway);
+        let gateway6 = v6.map(|v| v.gateway);
+        (!plug.internal && (gateway.is_some() || gateway6.is_some())).then(|| WayOut { ifname: ifname.to_owned(), gateway, gateway6 })
+    }
+}
+
+/// After a network was unplugged: a default route that went with it comes
+/// back through the first of the container's remaining networks that can
+/// give one. A default route that is still there stays. IPv4 and IPv6 each
+/// on their own: a network that cannot give one family's route is passed
+/// over for that family only.
+pub fn restore_default_routes(pid: libc::pid_t, ways: &[WayOut]) -> io::Result<()> {
+    let netns = std::fs::File::open(format!("/proc/{pid}/ns/net"))?;
+    let mut inner = Netlink::open_in(&netns)?;
+    for way in ways {
+        let Some(gateway) = way.gateway else { continue };
+        if netlink::index_in(&netns, &way.ifname).and_then(|index| netlink::add_default_route_if_none(&mut inner, index, gateway)).is_ok() {
+            break;
+        }
+    }
+    for way in ways {
+        let Some(gateway) = way.gateway6 else { continue };
+        if netlink::index_in(&netns, &way.ifname).and_then(|index| netlink::add_default_route6(&mut inner, index, gateway)).is_ok() {
+            break;
+        }
+    }
+    Ok(())
 }
 
 /// The LISTEN lines of a process's network namespace, IPv4 and IPv6, as the
@@ -760,5 +807,23 @@ mod tests {
         kiri_proto::encode_net_attach::<&str>(&mut buf, "c1", "eth1", "kiri2", [10, 5, 0, 2], 24, [10, 5, 0, 1], &[], &[]);
         let Ok(kiri_proto::Msg::NetAttach { net, .. }) = kiri_proto::decode(&buf) else { panic!() };
         assert_eq!(Ip6::from_opts(net.opts), None);
+    }
+
+    #[test]
+    fn only_a_routed_network_is_a_way_out() {
+        let routed = Plug::default();
+        let v6 = Ip6 { ip: [0xfd, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2], prefix: 64, gateway: [0xfd, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] };
+        let gateway = [10, 5, 0, 1];
+        assert_eq!(WayOut::of("eth1", gateway, None, routed), Some(WayOut { ifname: "eth1".into(), gateway: Some(gateway), gateway6: None }));
+        assert_eq!(WayOut::of("eth2", gateway, Some(v6), routed), Some(WayOut { ifname: "eth2".into(), gateway: Some(gateway), gateway6: Some(v6.gateway) }));
+        // An IPv6-only network has no IPv4 gateway to route through.
+        let v6_only = Plug { no_ipv4: true, ..routed };
+        assert_eq!(WayOut::of("eth1", gateway, Some(v6), v6_only), Some(WayOut { ifname: "eth1".into(), gateway: None, gateway6: Some(v6.gateway) }));
+        assert_eq!(WayOut::of("eth1", [0; 4], Some(v6), routed).unwrap().gateway, None);
+        // An internal network gives no default route, whatever it has.
+        let internal = Plug { internal: true, ..routed };
+        assert_eq!(WayOut::of("eth1", gateway, Some(v6), internal), None);
+        assert_eq!(WayOut::of("eth1", [0; 4], None, routed), None);
+        assert_eq!(WayOut::of("eth1", gateway, None, v6_only), None);
     }
 }

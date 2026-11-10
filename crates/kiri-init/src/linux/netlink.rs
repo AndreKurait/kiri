@@ -303,7 +303,19 @@ pub fn add_default_route6(nl: &mut Netlink, index: i32, gateway: [u8; 16]) -> io
 }
 
 pub fn add_default_route(nl: &mut Netlink, index: i32, gateway: [u8; 4]) -> io::Result<()> {
-    let mut m = Msg::new(RTM_NEWROUTE, NLM_F_ACK | NLM_F_CREATE);
+    default_route(nl, index, gateway, 0)
+}
+
+/// The IPv4 default route, unless the namespace already has one: without
+/// `NLM_F_EXCL` the kernel would put a second one in front of it. (The
+/// kernel compares routes of the same metric; the default routes made
+/// here all have none.)
+pub fn add_default_route_if_none(nl: &mut Netlink, index: i32, gateway: [u8; 4]) -> io::Result<()> {
+    default_route(nl, index, gateway, NLM_F_EXCL)
+}
+
+fn default_route(nl: &mut Netlink, index: i32, gateway: [u8; 4], flags: u16) -> io::Result<()> {
+    let mut m = Msg::new(RTM_NEWROUTE, NLM_F_ACK | NLM_F_CREATE | flags);
     // struct rtmsg: family, dst_len, src_len, tos, table, protocol, scope, type, flags.
     let mut rt = [0u8; 12];
     rt[0] = libc::AF_INET as u8;

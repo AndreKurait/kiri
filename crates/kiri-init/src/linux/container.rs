@@ -80,6 +80,9 @@ pub struct Process {
     /// network namespace would otherwise keep them, and the address that
     /// goes back to the pool, alive.
     pub veths: Vec<String>,
+    /// Its extra networks that can give a default route, in the order they
+    /// were joined (`net::restore_default_routes`).
+    pub ways_out: Vec<super::net::WayOut>,
     /// Inode of its own network namespace, or of the one it joined; 0 for
     /// the host's and for execs. Says whether a namespace outlives this
     /// container (see `teardown`).
@@ -361,6 +364,7 @@ pub fn spawn(spec: &RunSpec<'_>, paths: &Paths, net: NetCtx<'_>) -> io::Result<P
         tty: prepared.tty,
         dns_entries: (bridged && embedded_dns).then(|| (spec.net.bridge.to_owned(), spec.net.ip)).into_iter().collect(),
         veths,
+        ways_out: Vec::new(),
         netns,
         teardown: Some(Teardown { base, rootfs, cgroup, remove }),
     })
@@ -478,6 +482,7 @@ pub fn exec(spec: &ExecSpec<'_>, target_pid: libc::pid_t, paths: &Paths) -> io::
         tty: prepared.tty,
         dns_entries: Vec::new(),
         veths: Vec::new(),
+        ways_out: Vec::new(),
         netns: 0,
         teardown: None,
     })

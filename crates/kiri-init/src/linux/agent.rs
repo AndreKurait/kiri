@@ -581,10 +581,18 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                                 if let Some(p) = procs.get_mut(&pid) {
                                     p.run.dns_entries.push((n.bridge.to_owned(), n.ip));
                                     p.run.veths.push(host_if.clone());
+                                    // The interface is new: nothing kept under its name holds.
+                                    p.run.ways_out.retain(|w| w.ifname != ifname);
+                                    p.run.ways_out.extend(net::WayOut::of(ifname, n.gateway, v6, plug));
                                 }
                                 Msg::Ack.encode(&mut out)
                             }
-                            Err(e) => Msg::Error(&format!("connect: {e}")).encode(&mut out),
+                            Err(e) => {
+                                // The daemon takes the network as not joined: no
+                                // interface, and no route through it, stays behind.
+                                let _ = net::detach(&host_if);
+                                Msg::Error(&format!("connect: {e}")).encode(&mut out)
+                            }
                         }
                     }
                     None => Msg::Error(&format!("container {id} is not running")).encode(&mut out),
@@ -606,8 +614,17 @@ pub fn serve(mut conn: File, paths: &Paths) -> io::Result<()> {
                         if let Some(p) = procs.get_mut(&pid) {
                             p.run.dns_entries.retain(|(b, a)| !(b == bridge && *a == ip));
                             p.run.veths.retain(|v| *v != host_if);
+                            p.run.ways_out.retain(|w| w.ifname != ifname);
                         }
-                        match net::detach(&host_if) {
+                        let detached = net::detach(&host_if);
+                        // Whatever the answer, the daemon takes the network as
+                        // left. A default route that is still there stays, and a
+                        // route that cannot be given back is not the disconnect's
+                        // failure.
+                        if let Some(p) = procs.get(&pid) {
+                            let _ = net::restore_default_routes(pid, &p.run.ways_out);
+                        }
+                        match detached {
                             Ok(()) => Msg::Ack.encode(&mut out),
                             Err(e) => Msg::Error(&format!("disconnect: {e}")).encode(&mut out),
                         }
