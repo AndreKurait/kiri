@@ -24,9 +24,12 @@ stop
 for e in base head; do
   bin=$BASE_BIN; [ $e = head ] && bin=$HEAD_BIN
   $SUDO rm -rf "$WORK/$e-run"; mkdir -p "$WORK/$e-run"
+  # The socket is named, so both engines listen where the check looks even
+  # when the two builds differ in where they would put it.
   docker run -d --name kiri-perf-$e --privileged --tmpfs /run \
     -v kiri-perf-$e-lib:/var/lib/kiri -v kiri-perf-$e-store:/root/.local/share/kiri \
     -v "$bin:/opt/kiri:ro" -v "$WORK/$e-run:/root/.kiri/run" \
+    -e KIRI_SOCKET=/root/.kiri/run/docker.sock \
     alpine:3.21 sh -c 'exec /opt/kiri/kiri daemon' >/dev/null
 done
 pid() { docker inspect -f '{{.State.Pid}}' kiri-perf-$1; }
