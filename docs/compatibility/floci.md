@@ -130,6 +130,29 @@ baseline. It is separate from the ARM64 Docker Desktop runs above. Small sample
 counts and a fixed engine order limit conclusions about tail latency and
 performance on other machines.
 
+## PostgreSQL readiness follow-up
+
+The Linux benchmark exposed another Floci-side delay: PostgreSQL IAM-role
+initialization retried once per second. A database becoming ready just after a
+poll could wait almost another second before the API returned. Isolated Floci
+PRs #635 (dev) and #636 (main) poll every 100 ms with a monotonic 60-second
+budget, bounded exec waits, interruption handling, and preserved diagnostics.
+Success still requires IAM initialization SQL over the final TCP listener.
+A timed-out exec fails initialization so existing launch cleanup can stop the
+container without overlapping SQL attempts.
+
+Dev passed 72 focused tests and all 70 RDS SDK cases on both Docker and Kiri.
+Main passed 83 focused tests, including the required container-exec timeout
+backport, and all 45 cases in the 11 shared RDS SDK classes on both engines.
+The dev-specific control-plane class was excluded from the main run. Both
+variants passed packaging and Checkstyle. Runtime image IDs matched between
+engines, and the SDK test source hashes matched their respective branches.
+These functional runs are not controlled performance measurements.
+
+[Validation identities and report hashes](floci-postgres-readiness-validation-2026-11-10.json)
+record the exact sources, images, case counts, and test source parity. The
+baseline timings above do not include this readiness fix.
+
 ## Broader compatibility validation
 
 The merged dev JVM image at `e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39`
