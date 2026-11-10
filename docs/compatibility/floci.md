@@ -97,6 +97,36 @@ smoke test. Inspect artifact completeness and matching image IDs before
 interpreting a benchmark; GitHub runner hardware and run-order effects still
 limit comparisons across separate runs.
 
+The dedicated Linux AMD64 run `42771704331` completed successfully at Kiri
+revision `a84a23eb1c051bdbf786f9895a40b5141efde66a`. Artifact checks verified
+matching workload image IDs, all expected samples, and CPUs 0 and 1 for both
+Floci's main process and exec processes.
+
+| Median measured lifecycle | Docker | Kiri | Kiri elapsed-time change |
+| --- | ---: | ---: | ---: |
+| Lambda: create, 21 invocations, delete | 372.1 ms | 222.4 ms | 40% less |
+| Redis: create, PING/SET/GET, delete | 414.2 ms | 144.2 ms | 65% less |
+| PostgreSQL: create, table/insert/query, delete | 2,039.1 ms | 2,285.4 ms | 12% more |
+
+Lambda first-result latency was 156.0 ms on Docker and 69.0 ms on Kiri.
+Warm invocations were 5.91 ms and 6.92 ms respectively, about 17% slower on Kiri.
+Deletion was faster on Kiri for all three workloads: Lambda 91.2 versus 13.2 ms,
+Redis 178.0 versus 17.2 ms, and PostgreSQL 258.1 versus 37.1 ms.
+
+PostgreSQL creation showed a polling boundary: Docker's samples split between
+roughly 1.2 and 2.3 seconds, while Kiri's clustered near 2.2 seconds.
+Floci's `RdsContainerManager.execUntilSuccess` sleeps one second between
+initialization attempts. Comparing PostgreSQL's embedded final-ready timestamps
+with Floci's instance-created timestamps showed median gaps of 514.5 ms on
+Docker and 956.0 ms on Kiri. This supports readiness polling as a substantial
+contributor; it does not establish PostgreSQL query-throughput performance or
+attribute every startup difference to that wait.
+
+[Raw samples and environment](floci-linux-amd64-2026-11-10.json) preserve this
+baseline. It is separate from the ARM64 Docker Desktop runs above. Small sample
+counts and a fixed engine order limit conclusions about tail latency and
+performance on other machines.
+
 ## Broader compatibility validation
 
 The merged dev JVM image at `e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39`
