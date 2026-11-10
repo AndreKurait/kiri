@@ -11,6 +11,7 @@ import concurrent.futures
 import http.client
 import io
 import ipaddress
+import itertools
 import json
 import math
 import os
@@ -118,8 +119,8 @@ class Engine:
         for running in (False, True):
             if running:
                 self.request("POST", f"/containers/{cid}/start", status=204)
-            for compressed in (False, True):
-                name = f"snapshot-{running}-{compressed}.sql"
+            for compressed, chunked in itertools.product((False, True), repeat=2):
+                name = f"snapshot-{running}-{compressed}-{chunked}.sql"
                 payload = b"SELECT 42;\n" * 1024
                 body = io.BytesIO()
                 with tarfile.open(fileobj=body, mode="w:gz" if compressed else "w") as archive:
@@ -132,9 +133,11 @@ class Engine:
                     # Exercise both fixed-length and chunked HTTP bodies, without
                     # Content-Encoding, as docker-java sends compressed archives.
                     chunks = (data[i:i + 7] for i in range(0, len(data), 7))
+                    headers = {"Content-Type": "application/x-tar"}
+                    if chunked:
+                        headers["Transfer-Encoding"] = "chunked"
                     conn.request("PUT", f"/v1.48/containers/{cid}/archive?path=/tmp",
-                                 chunks if running else data,
-                                 {"Content-Type": "application/x-tar"}, encode_chunked=running)
+                                 chunks if chunked else data, headers, encode_chunked=chunked)
                     response = conn.getresponse()
                     result = response.read()
                     assert response.status == 200, (response.status, result)

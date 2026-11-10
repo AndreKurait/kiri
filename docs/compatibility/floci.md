@@ -49,7 +49,9 @@ shutdown behavior. Its Python runtime ran as PID 1 without an init process,
 so SIGTERM did not terminate it promptly. Floci now requests an init process
 and preserves a bounded drain for external extension shutdown callbacks and
 their final logs. The isolated fix was merged into AndreKurait/floci main
-through PR #628 and dev through PR #629.
+through PR #628 and dev through PR #629. The main-branch change was later
+reverted and is proposed again in PR #671. The measurements below remain tied
+to their recorded revisions, not the current state of either branch.
 
 A follow-up comparison used 20 fresh functions per engine, each with one
 first invocation and 20 warm invocations, followed by deletion. Both engines
@@ -95,10 +97,14 @@ on a branch containing this workflow version. To measure another revision,
 update the pinned checkout commit in the workflow after validating that source.
 The resolved commit is recorded in `floci-source.txt`. The `floci-runtime-benchmark`
 artifact contains raw samples, image identities, binary hashes, CPU affinity,
-and daemon/application logs. Normal compatibility CI keeps its short Lambda
-smoke test. Inspect artifact completeness and matching image IDs before
+and daemon/application logs. Normal compatibility CI runs its short Lambda
+smoke test plus one Redis and one PostgreSQL lifecycle per engine. Inspect
+artifact completeness and matching image IDs before
 interpreting a benchmark; GitHub runner hardware and run-order effects still
 limit comparisons across separate runs.
+
+With ten service samples, the nearest-rank p95 is the maximum observation.
+Treat it as an observed worst sample, not a reliable tail-latency estimate.
 
 The dedicated Linux AMD64 run `42771704331` completed successfully at Kiri
 revision `a84a23eb1c051bdbf786f9895a40b5141efde66a`. Artifact checks verified

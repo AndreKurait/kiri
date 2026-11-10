@@ -37,6 +37,11 @@ from a matching API version.
   workloads using the standalone daemon, leave that override unset.
 - Create `/.dockerenv` before applying a read-only root filesystem so
   applications can detect that they are running inside a container.
+- Accept plain and gzip tar uploads with fixed-length or chunked HTTP bodies,
+  for stopped and running containers. After a complete tar, drain the transport
+  without validating unused gzip trailers, matching Docker's acceptance of
+  bad CRCs and trailing bytes. Damage encountered during extraction still
+  fails; truncated input returns 400 here versus 500 on Docker 28.0.4.
 - Attach and exec without HTTP upgrade return a streaming `200` response,
   allowing SDKs to subscribe before starting a container. Clients requesting
   an upgrade still receive `101`.

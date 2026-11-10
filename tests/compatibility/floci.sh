@@ -62,9 +62,11 @@ for runtime in docker kiri; do
   fi
   "${D[@]}" pull public.ecr.aws/lambda/python:3.12 >"$REPORTS/$runtime-lambda-pull.log" 2>&1
   if [ "$SERVICE_SAMPLES" -gt 0 ]; then
+    : >"$REPORTS/$runtime-service-pulls.log"
+    : >"$REPORTS/$runtime-service-images.jsonl"
     for service_image in valkey/valkey:8 postgres:16-alpine; do
       "${D[@]}" pull "$service_image" >>"$REPORTS/$runtime-service-pulls.log" 2>&1
-      "${D[@]}" image inspect "$service_image" >>"$REPORTS/$runtime-service-images.jsonl"
+      "${D[@]}" image inspect --format '{{json .}}' "$service_image" >>"$REPORTS/$runtime-service-images.jsonl"
     done
   fi
   "${D[@]}" image inspect "$IMAGE" >"$REPORTS/$runtime-image.json"

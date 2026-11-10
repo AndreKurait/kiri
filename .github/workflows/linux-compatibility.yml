@@ -12,7 +12,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: linux-compatibility-${{ github.ref }}
+  group: linux-compatibility-${{ github.ref }}-${{ inputs.benchmark || 'compatibility' }}
   cancel-in-progress: true
 jobs:
   compatibility:
@@ -46,10 +46,11 @@ jobs:
         env:
           KIRI_BIN_DIR: ${{ github.workspace }}/target/linux-x86_64/release
         run: bash tests/compatibility/socket-access.sh
-      - name: Exercise Floci Lambda on both engines
+      - name: Exercise Floci Lambda, Redis, and PostgreSQL on both engines
         env:
           KIRI_BIN_DIR: ${{ github.workspace }}/target/linux-x86_64/release
           FLOCI_SAMPLES: "2"
+          FLOCI_SERVICE_SAMPLES: "1"
         run: bash tests/compatibility/floci.sh
       - name: Preserve conformance and benchmark reports
         if: always()

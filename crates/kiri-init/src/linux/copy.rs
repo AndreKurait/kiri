@@ -149,9 +149,10 @@ fn copy_in(conn: &mut fs::File, spec: &CopySpec<'_>) -> io::Result<()> {
             entry.unpack_in(dest)?;
         }
     }
-    // The archive's trailing padding: read it so the host's writes complete.
-    io::copy(&mut reader, &mut io::sink())?;
-    drop(reader);
+    // Drain the copy transport so the host's writes complete. Docker stops
+    // decoding at the tar end marker, so a bad gzip trailer or trailing
+    // non-gzip data must not turn a successful extraction into an error.
+    reader.drain_transport()?;
     let mut out = Vec::new();
     Msg::CopyDone.encode(&mut out);
     conn.write_all(&out)
@@ -159,16 +160,41 @@ fn copy_in(conn: &mut fs::File, spec: &CopySpec<'_>) -> io::Result<()> {
 
 /// Docker clients can send gzip-compressed tar bodies without a
 /// Content-Encoding header. Sniff the stream after removing copy framing.
-fn archive_reader<'a>(source: impl Read + 'a) -> io::Result<Box<dyn Read + 'a>> {
+enum ArchiveReader<'a> {
+    Plain(Box<dyn Read + 'a>),
+    Gzip(flate2::read::MultiGzDecoder<Box<dyn Read + 'a>>),
+}
+
+impl Read for ArchiveReader<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Plain(reader) => reader.read(output),
+            Self::Gzip(reader) => reader.read(output),
+        }
+    }
+}
+
+impl ArchiveReader<'_> {
+    fn drain_transport(self) -> io::Result<()> {
+        let mut source = match self {
+            Self::Plain(reader) => reader,
+            Self::Gzip(reader) => reader.into_inner(),
+        };
+        io::copy(&mut source, &mut io::sink())?;
+        Ok(())
+    }
+}
+
+fn archive_reader<'a>(source: impl Read + 'a) -> io::Result<ArchiveReader<'a>> {
     let mut buffered = BufReader::with_capacity(256 * 1024, source);
     let mut prefix = Vec::with_capacity(3);
     buffered.by_ref().take(3).read_to_end(&mut prefix)?;
     let gzip = prefix.starts_with(&[0x1f, 0x8b, 0x08]);
-    let reader = io::Cursor::new(prefix).chain(buffered);
+    let reader: Box<dyn Read + 'a> = Box::new(io::Cursor::new(prefix).chain(buffered));
     if gzip {
-        Ok(Box::new(flate2::read::MultiGzDecoder::new(reader)))
+        Ok(ArchiveReader::Gzip(flate2::read::MultiGzDecoder::new(reader)))
     } else {
-        Ok(Box::new(reader))
+        Ok(ArchiveReader::Plain(reader))
     }
 }
 
@@ -521,7 +547,7 @@ mod tests {
                     assert_eq!(sql, "SELECT 1;");
                     assert!(entries.next().is_none());
                 }
-                io::copy(&mut reader, &mut io::sink()).unwrap();
+                reader.drain_transport().unwrap();
             }
             assert_eq!(conn, b"next-request");
         }
@@ -536,5 +562,43 @@ mod tests {
         compressed[crc] ^= 1;
         let mut reader = archive_reader(&compressed[..]).unwrap();
         assert!(io::copy(&mut reader, &mut io::sink()).is_err());
+    }
+
+    #[test]
+    fn completed_tar_ignores_gzip_trailer_errors_and_drains_copy_frames() {
+        let mut tar = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(3);
+        header.set_mode(0o640);
+        tar.append_data(&mut header, "snapshot.sql", &b"sql"[..]).unwrap();
+        let plain = tar.into_inner().unwrap();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&plain).unwrap();
+        let valid = encoder.finish().unwrap();
+        let mut bad_crc = valid.clone();
+        let crc = bad_crc.len() - 8;
+        bad_crc[crc] ^= 1;
+        for bytes in [bad_crc, [valid.clone(), vec![0; 32]].concat(), [valid, b"junk".to_vec()].concat()] {
+            let mut wire = Vec::new();
+            for part in bytes.chunks(7) {
+                wire.extend_from_slice(&(part.len() as u32).to_le_bytes());
+                wire.extend_from_slice(part);
+            }
+            wire.extend_from_slice(&0u32.to_le_bytes());
+            wire.extend_from_slice(b"next-request");
+            let mut conn = &wire[..];
+            let mut reader = archive_reader(Chunks::new(&mut conn)).unwrap();
+            {
+                let mut archive = tar::Archive::new(&mut reader);
+                let mut entries = archive.entries().unwrap();
+                let mut entry = entries.next().unwrap().unwrap();
+                let mut content = Vec::new();
+                entry.read_to_end(&mut content).unwrap();
+                assert_eq!(content, b"sql");
+                assert!(entries.next().is_none());
+            }
+            reader.drain_transport().unwrap();
+            assert_eq!(conn, b"next-request");
+        }
     }
 }
