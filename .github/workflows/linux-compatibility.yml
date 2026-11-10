@@ -4,13 +4,19 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      benchmark:
+        description: Run the pinned Floci Lambda, Redis, and PostgreSQL benchmark
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
-  group: linux-compatibility-${{ github.ref }}
+  group: linux-compatibility-${{ github.ref }}-${{ inputs.benchmark || 'compatibility' }}
   cancel-in-progress: true
 jobs:
   compatibility:
+    if: ${{ !inputs.benchmark }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -40,10 +46,11 @@ jobs:
         env:
           KIRI_BIN_DIR: ${{ github.workspace }}/target/linux-x86_64/release
         run: bash tests/compatibility/socket-access.sh
-      - name: Exercise Floci Lambda on both engines
+      - name: Exercise Floci Lambda, Redis, and PostgreSQL on both engines
         env:
           KIRI_BIN_DIR: ${{ github.workspace }}/target/linux-x86_64/release
           FLOCI_SAMPLES: "2"
+          FLOCI_SERVICE_SAMPLES: "1"
         run: bash tests/compatibility/floci.sh
       - name: Preserve conformance and benchmark reports
         if: always()
@@ -53,4 +60,55 @@ jobs:
           path: |
             target/compatibility
             target/floci-benchmark
+          if-no-files-found: ignore
+  benchmark:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.benchmark }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Check out the validated Floci source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: AndreKurait/floci
+          ref: aa044a5aca52805b6e7c02f0c27d7e02f83a896a
+          path: target/floci-source
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          java-version: "25"
+          distribution: temurin
+          cache: maven
+          cache-dependency-path: target/floci-source/pom.xml
+      - name: Build the validated JVM application
+        working-directory: target/floci-source
+        run: |
+          ./mvnw package -Dmaven.test.skip=true -B -ntp
+          docker build -f docker/Dockerfile.jvm-package -t floci-runtime-benchmark:validated .
+      - name: Record the measured Floci revision
+        run: |
+          mkdir -p target/floci-benchmark
+          git -C target/floci-source rev-parse HEAD > target/floci-benchmark/floci-source.txt
+      - name: Build native Linux engine and agent
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          cargo xtask linux --arch amd64
+      - name: Measure both engines sequentially on the same two CPUs
+        env:
+          KIRI_BIN_DIR: ${{ github.workspace }}/target/linux-x86_64/release
+          FLOCI_IMAGE: floci-runtime-benchmark:validated
+          FLOCI_LOCAL_IMAGE: "1"
+          FLOCI_CPUSET: "0,1"
+          FLOCI_SAMPLES: "20"
+          FLOCI_SERVICE_SAMPLES: "10"
+        run: bash tests/compatibility/floci.sh
+      - name: Preserve benchmark samples and environment
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: floci-runtime-benchmark
+          path: target/floci-benchmark
           if-no-files-found: ignore

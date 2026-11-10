@@ -41,3 +41,211 @@ Docker and 65.6 ms for Kiri; warm-invocation p95 was 7.74 ms and 8.78 ms.
 [Raw measurements and binary hashes](floci-lambda-2026-11-10.json) retain every
 sample. Reproduce with `bash tests/compatibility/floci.sh`; use
 `FLOCI_CPUSET=0,1` to constrain both engines to the same CPUs.
+
+## Floci shutdown fix and follow-up measurement
+
+The roughly one-second delete time above came primarily from Floci's Lambda
+shutdown behavior. Its Python runtime ran as PID 1 without an init process,
+so SIGTERM did not terminate it promptly. Floci now requests an init process
+and preserves a bounded drain for external extension shutdown callbacks and
+their final logs. The isolated fix was merged into AndreKurait/floci main
+through PR #628 and dev through PR #629. The main-branch change was later
+reverted and is proposed again in PR #671. The measurements below remain tied
+to their recorded revisions, not the current state of either branch.
+
+A follow-up comparison used 20 fresh functions per engine, each with one
+first invocation and 20 warm invocations, followed by deletion. Both engines
+used CPUs 0 and 1 sequentially, identical packaged JVM Floci images and cached
+Python 3.12 images, with one warmup function excluded and no concurrent Maven
+build. The workload has no external Lambda extensions.
+
+| Median elapsed time, with Floci fix | Docker 28.0.4 | Kiri |
+| --- | ---: | ---: |
+| Create function through first result | 104.8 ms | 61.3 ms |
+| Warm invocation | 3.86 ms | 4.31 ms |
+| Delete function | 66.2 ms | 8.7 ms |
+| Create, 21 invocations, delete | 260.2 ms | 157.0 ms |
+
+Kiri completed this lifecycle about 1.66 times faster than Docker. First-result
+latency was about 1.71 times faster and deletion about 7.59 times faster.
+Warm invocations were about 11% slower on Kiri in this run.
+
+The larger improvement was the Floci fix: Kiri's median lifecycle dropped from
+1,148.5 ms to 157.0 ms, about 7.32 times faster. Docker improved from 1,294.8 ms
+to 260.2 ms, about 4.98 times faster. These are separate effects; the Floci
+improvement should not be attributed to changing container runtimes.
+
+[Paired before/after measurements](floci-lambda-shutdown-2026-11-10.json)
+include the source revisions, image IDs, and samples. The optimized source
+tree is identical to merged dev revision
+`e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39`. These measurements cover a small
+local Lambda workload, not all Floci services or a native Floci build.
+
+### Dedicated Linux benchmark
+
+The existing Linux compatibility workflow has an opt-in `benchmark` input.
+It builds pinned Floci revision `aa044a5aca52805b6e7c02f0c27d7e02f83a896a`
+with the PostgreSQL readiness fix, finishes all compilation before
+measurement, and runs Docker and Kiri sequentially on CPUs 0 and 1 in disposable
+engines. Each engine measures 20 Lambda functions with 20 warm invocations each,
+plus ten Redis and ten PostgreSQL lifecycles. One warmup per workload is excluded.
+The service probes verify Redis PING/SET/GET and a PostgreSQL table, insert, and
+query before deleting the resources.
+
+Run `gh workflow run linux-compatibility.yml --ref <branch> -f benchmark=true`
+on a branch containing this workflow version. To measure another revision,
+update the pinned checkout commit in the workflow after validating that source.
+The resolved commit is recorded in `floci-source.txt`. The `floci-runtime-benchmark`
+artifact contains raw samples, image identities, binary hashes, CPU affinity,
+and daemon/application logs. Normal compatibility CI runs its short Lambda
+smoke test plus one Redis and one PostgreSQL lifecycle per engine. Inspect
+artifact completeness and matching image IDs before
+interpreting a benchmark; GitHub runner hardware and run-order effects still
+limit comparisons across separate runs.
+
+With ten service samples, the nearest-rank p95 is the maximum observation.
+Treat it as an observed worst sample, not a reliable tail-latency estimate.
+
+The dedicated Linux AMD64 run `42771704331` completed successfully at Kiri
+revision `a84a23eb1c051bdbf786f9895a40b5141efde66a`. Artifact checks verified
+matching workload image IDs, all expected samples, and CPUs 0 and 1 for both
+Floci's main process and exec processes.
+
+| Median measured lifecycle | Docker | Kiri | Kiri elapsed-time change |
+| --- | ---: | ---: | ---: |
+| Lambda: create, 21 invocations, delete | 372.1 ms | 222.4 ms | 40% less |
+| Redis: create, PING/SET/GET, delete | 414.2 ms | 144.2 ms | 65% less |
+| PostgreSQL: create, table/insert/query, delete | 2,039.1 ms | 2,285.4 ms | 12% more |
+
+Lambda first-result latency was 156.0 ms on Docker and 69.0 ms on Kiri.
+Warm invocations were 5.91 ms and 6.92 ms respectively, about 17% slower on Kiri.
+Deletion was faster on Kiri for all three workloads: Lambda 91.2 versus 13.2 ms,
+Redis 178.0 versus 17.2 ms, and PostgreSQL 258.1 versus 37.1 ms.
+
+PostgreSQL creation showed a polling boundary: Docker's samples split between
+roughly 1.2 and 2.3 seconds, while Kiri's clustered near 2.2 seconds.
+Floci's `RdsContainerManager.execUntilSuccess` sleeps one second between
+initialization attempts. Comparing PostgreSQL's embedded final-ready timestamps
+with Floci's instance-created timestamps showed median gaps of 514.5 ms on
+Docker and 956.0 ms on Kiri. This supports readiness polling as a substantial
+contributor; it does not establish PostgreSQL query-throughput performance or
+attribute every startup difference to that wait.
+
+[Raw samples and environment](floci-linux-amd64-2026-11-10.json) preserve this
+baseline. It is separate from the ARM64 Docker Desktop runs above. Small sample
+counts and a fixed engine order limit conclusions about tail latency and
+performance on other machines.
+
+## PostgreSQL readiness follow-up
+
+The Linux benchmark exposed another Floci-side delay: PostgreSQL IAM-role
+initialization retried once per second. A database becoming ready just after a
+poll could wait almost another second before the API returned. Isolated Floci
+PRs #635 (dev) and #636 (main) poll every 100 ms with a monotonic 60-second
+budget, bounded exec waits, interruption handling, and preserved diagnostics.
+Success still requires IAM initialization SQL over the final TCP listener.
+A timed-out exec fails initialization so existing launch cleanup can stop the
+container without overlapping SQL attempts.
+
+Dev passed 72 focused tests and all 70 RDS SDK cases on both Docker and Kiri.
+Main passed 83 focused tests, including the required container-exec timeout
+backport, and all 45 cases in the 11 shared RDS SDK classes on both engines.
+The dev-specific control-plane class was excluded from the main run. Both
+variants passed packaging and Checkstyle. Runtime image IDs matched between
+engines, and the SDK test source hashes matched their respective branches.
+These functional runs are not controlled performance measurements.
+
+[Validation identities and report hashes](floci-postgres-readiness-validation-2026-11-10.json)
+record the exact sources, images, case counts, and test source parity. The
+baseline timings above do not include this readiness fix.
+
+The follow-up Linux AMD64 benchmark `42773788430` passed using the exact dev
+fix revision and Kiri revision `127e7221d824c291c9c14adc2f7fbcd86f210454`.
+All workload image IDs matched between engines; CPU allocation and all expected
+samples passed the same artifact checks as the baseline.
+
+| Median elapsed time, with PostgreSQL readiness fix | Docker 28.0.4 | Kiri | Docker / Kiri |
+| --- | ---: | ---: | ---: |
+| Lambda create through first result | 200.9 ms | 80.7 ms | 2.49 |
+| Lambda warm invocation | 7.24 ms | 6.14 ms | 1.18 |
+| Lambda delete | 94.4 ms | 15.4 ms | 6.12 |
+| Lambda create, 21 invocations, delete | 448.2 ms | 235.0 ms | 1.91 |
+| Redis create through verified operation | 240.0 ms | 125.7 ms | 1.91 |
+| Redis delete | 179.7 ms | 17.3 ms | 10.41 |
+| Redis complete lifecycle | 419.3 ms | 142.7 ms | 2.94 |
+| PostgreSQL create through verified query | 1,772.0 ms | 1,517.8 ms | 1.17 |
+| PostgreSQL delete | 204.9 ms | 43.2 ms | 4.75 |
+| PostgreSQL complete lifecycle | 1,981.3 ms | 1,561.7 ms | 1.27 |
+
+In this run, Kiri reduced complete lifecycle time by 48% for Lambda, 66% for
+Redis, and 21% for PostgreSQL. Warm invocation results changed direction from
+the previous run; the PostgreSQL-only fix does not explain that difference,
+and these small runs do not establish a consistent warm-invocation advantage.
+
+Using PostgreSQL's embedded final-server ready timestamp, median time until
+Floci logged the instance as created was 109.5 ms for Docker and 55 ms for Kiri.
+The earlier run measured 514.5 ms and 956 ms respectively. This supports the
+readiness-polling diagnosis, but separate CI runs use different machines and
+are not a controlled before/after measure of the fix's overall speedup.
+
+[Follow-up samples, identities, and readiness gaps](floci-linux-amd64-postgres-readiness-2026-11-10.json)
+retain the complete evidence. Results remain scoped to these cached-image
+workloads and the JVM Floci build, not every service or a native Floci build.
+
+## Broader compatibility validation
+
+The merged dev JVM image at `e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39`
+was also exercised on both Linux ARM64 engines. The following counts combine
+the baseline suites with focused follow-up runs, deduplicating test cases.
+They are compatibility evidence, not controlled performance measurements.
+The [validation summary](floci-validation-2026-11-10.json) records revisions,
+binary hashes, case counts, report-manifest hashes, and remaining limitations.
+
+| Suite | Passing cases on Docker | Passing cases on Kiri |
+| --- | ---: | ---: |
+| Python SDK, including opt-in configurations | 905 | 905 |
+| Go SDK | 216 | 216 |
+| Node SDK | 505 | 505 |
+| AWS CLI, including Neptune retry | 324 | 324 |
+| Java SDK baseline cases covered by passing runs | 3,033 / 3,033 | 3,033 / 3,033 |
+| OpenTofu | 49 | 49 |
+| Terraform | 124 | 124 |
+| CDK | 26 | 26 |
+| Python IAM enforcement | 52 | 52 |
+
+The six Flink 1.18 cases normally disable themselves on an ARM64 JVM because
+their runtime image is AMD64-only. A follow-up run used a real AMD64 Java 17
+client and the AMD64 Flink image under the host's installed emulation, with
+Floci still running on ARM64. All six unchanged cases passed with zero skips
+on both engines. This covers functionality under emulation, not native AMD64
+performance. Passing these suites does not establish full Docker API parity.
+
+Terraform's first run overloaded this shared machine with 15 concurrent Bats
+files per engine and timed out. A retry limited each engine to two files at a
+time. All 15 files exited successfully and all 124 JUnit cases passed on each
+engine. Docker's reporting wrapper then failed while printing its summary,
+after a mounted-script edit during execution; its exit code 2 is retained.
+Independent aggregation verified all per-file exit codes and JUnit results.
+Kiri's wrapper completed normally with exit code 0.
+
+Kiri's archive upload path needed an additional compatibility fix. Docker
+clients can send plain or gzip-compressed tar archives to containers, including
+with chunked HTTP transfer encoding. Kiri now detects gzip after decoding the
+agent's copy framing, streams decompression, and preserves permission bits.
+Regression checks cover plain and compressed uploads to stopped and running
+containers with fixed-length and chunked requests. All 57 native Linux agent
+tests and the 20 affected Java follow-up cases passed.
+
+Other follow-up failures came from the validation setup or test assertions:
+callback tests needed a reachable published port; IAM policy tests and strict
+signature tests needed their documented, separate server configurations; and
+API Gateway tests needed to assert the unwrapped HTTP response and use a signed
+JWT with a real discovery/JWKS fixture. The latter fixture change is proposed
+separately in AndreKurait/floci PRs #631 (dev) and #632 (main).
+
+Parallel functional-suite elapsed times should not be interpreted as engine
+speedups. They include provider polling, application startup, image preparation,
+and shared-machine contention. For example, the RDS Terraform run waited about
+60 seconds before its first instance-status query, then polled at approximately
+10-second intervals. Such waits can dominate an otherwise fast container
+lifecycle.

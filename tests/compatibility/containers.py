@@ -9,13 +9,16 @@ import argparse
 import base64
 import concurrent.futures
 import http.client
+import io
 import ipaddress
+import itertools
 import json
 import math
 import os
 import socket
 import statistics
 import struct
+import tarfile
 import time
 import uuid
 from urllib.parse import quote
@@ -111,6 +114,40 @@ class Engine:
         self.request("POST", f"/containers/{cid}/start", status=204)
         assert self.request("POST", f"/containers/{cid}/wait")["StatusCode"] == 0
 
+    def archive_upload(self):
+        cid = self.create()
+        for running in (False, True):
+            if running:
+                self.request("POST", f"/containers/{cid}/start", status=204)
+            for compressed, chunked in itertools.product((False, True), repeat=2):
+                name = f"snapshot-{running}-{compressed}-{chunked}.sql"
+                payload = b"SELECT 42;\n" * 1024
+                body = io.BytesIO()
+                with tarfile.open(fileobj=body, mode="w:gz" if compressed else "w") as archive:
+                    entry = tarfile.TarInfo(name)
+                    entry.size, entry.mode = len(payload), 0o640
+                    archive.addfile(entry, io.BytesIO(payload))
+                data = body.getvalue()
+                conn = Connection(self.path)
+                try:
+                    # Exercise both fixed-length and chunked HTTP bodies, without
+                    # Content-Encoding, as docker-java sends compressed archives.
+                    chunks = (data[i:i + 7] for i in range(0, len(data), 7))
+                    headers = {"Content-Type": "application/x-tar"}
+                    if chunked:
+                        headers["Transfer-Encoding"] = "chunked"
+                    conn.request("PUT", f"/v1.48/containers/{cid}/archive?path=/tmp",
+                                 chunks if chunked else data, headers, encode_chunked=chunked)
+                    response = conn.getresponse()
+                    result = response.read()
+                    assert response.status == 200, (response.status, result)
+                finally:
+                    conn.close()
+                downloaded = self.request("GET", f"/containers/{cid}/archive?path=/tmp/{name}", raw=True)
+                with tarfile.open(fileobj=io.BytesIO(downloaded)) as archive:
+                    member = archive.getmember(name)
+                    assert member.mode == 0o640, member.mode
+                    assert archive.extractfile(member).read() == payload
     def pause_restart_exec(self):
         cid = self.create()
         self.request("POST", f"/containers/{cid}/start", status=204)
@@ -539,6 +576,7 @@ def main():
             ("macvlan", lambda: engine.direct_driver("macvlan")),
             ("ipvlan", lambda: engine.direct_driver("ipvlan")),
             ("container-lifecycle", engine.lifecycle),
+            ("archive-upload-plain-and-gzip", engine.archive_upload),
             ("pause-restart-detached-exec", engine.pause_restart_exec),
             ("resource-limit-reset", engine.resource_reset),
             ("invalid-updates-do-not-mutate", engine.invalid_updates),

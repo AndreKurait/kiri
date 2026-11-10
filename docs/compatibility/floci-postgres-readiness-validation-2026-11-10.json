@@ -1,0 +1,190 @@
+{
+  "scope": "PostgreSQL readiness fix regression validation; functional runs, not controlled timing measurements",
+  "variants": {
+    "dev": {
+      "pull_request": 635,
+      "images": {
+        "docker": "sha256:5f3a877d81ea279099d36c77483368e1beb7b259d63136fe5043a1f9b7033b7a",
+        "kiri": "sha256:5f3a877d81ea279099d36c77483368e1beb7b259d63136fe5043a1f9b7033b7a",
+        "source": "aa044a5aca52805b6e7c02f0c27d7e02f83a896a"
+      },
+      "focused_tests": 72,
+      "focused_report_hashes": {
+        "TEST-io.github.hectorvent.floci.services.rds.container.PostgresIamReadinessTest.xml": "ddfa13b65a7ae416691c93bc69b71b708bb84150aaf7c0fb58bae7d27063d534",
+        "TEST-io.github.hectorvent.floci.services.rds.container.RdsContainerManagerTest.xml": "f821ea2f34510b8292db09e2c0a291a2f088fc2d5a58e53990e348df37037ec5"
+      },
+      "sdk": {
+        "docker": {
+          "tests": 70,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "reports": {
+            "TEST-com.floci.test.RdsAutoscalingMinimumTest.xml": "3cfc208ed1ad1de704e76642d1172501147f49185f8540f086da63e02aa6df54",
+            "TEST-com.floci.test.RdsAwsAdvancedJdbcWrapperTest.xml": "b4e6d4c34b958a024e615e797c15952bfa97a7355877a70a4f0d9eed14d3bdf2",
+            "TEST-com.floci.test.RdsClusterIamStateTest.xml": "81b837344238139908edc30bdbca6d1223ed217103b044d3cf1e90066914c538",
+            "TEST-com.floci.test.RdsClusterMemberIamStateTest.xml": "c583669c79b368402abfbec1838b6d7e31f9db5caa226a1b48b2003196547f10",
+            "TEST-com.floci.test.RdsClusterRestoreIamTest.xml": "61c1365c4fac8baf55fbf9d839877e76a8b698b510fdc4719b75496f6e083c37",
+            "TEST-com.floci.test.RdsControlPlaneTest.xml": "d6e0650ee33acc17e5ccbc62f503e94f0dcac412b17958cf68dcaff3cd2b2bec",
+            "TEST-com.floci.test.RdsIamTokenCompatTest.xml": "e54fee009c2e4a03a2c5e551399935026b79d8ba63591af490f639a45ae19eee",
+            "TEST-com.floci.test.RdsInstanceSnapshotIamTest.xml": "b562d0dd612a25ea1489c8113fa4e0d4381e997b2e4bcfc59f8e99ca9600af06",
+            "TEST-com.floci.test.RdsJdbcCompatTest.xml": "240c8213278ee6bfbd0af0bc260baa32a39dac40a24668d47abe16b44c7d28c7",
+            "TEST-com.floci.test.RdsMemberCredentialsTest.xml": "5c3e706d7235873a4a8df0a672d024f00aa6ab9b98609077966c0c070ed67c30",
+            "TEST-com.floci.test.RdsStorageTypeTest.xml": "1cd4831a4d9bb5c6a6b16ee270988da70eec36d6554a77f6d135d40257dae464",
+            "TEST-com.floci.test.RdsSubnetOwnershipTest.xml": "d1f845f00e36c88a72c23a5429305854518903ebe2b36f9c3451af50647cfefd"
+          }
+        },
+        "kiri": {
+          "tests": 70,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "reports": {
+            "TEST-com.floci.test.RdsAutoscalingMinimumTest.xml": "fd89568d4f5c1b7bc57a7be94b9601df5d8027da70fb5ae46a223fd14655f232",
+            "TEST-com.floci.test.RdsAwsAdvancedJdbcWrapperTest.xml": "75b6cd3b3636cdaabe3ef2a1985d8ffad6bdfce2a736f00945aa2f1506a29656",
+            "TEST-com.floci.test.RdsClusterIamStateTest.xml": "021a3d9ed0e66003197e68682da6df1fac30a29d5bcec1a800fcb311ec24bd3d",
+            "TEST-com.floci.test.RdsClusterMemberIamStateTest.xml": "51f54715079458daec99a0d4e6443d982780a0e4cb4e9152c04d4de7bffd0148",
+            "TEST-com.floci.test.RdsClusterRestoreIamTest.xml": "63953630857350b764273cbdd161e58b6e9dbc9cc862713169df1bc2000641a5",
+            "TEST-com.floci.test.RdsControlPlaneTest.xml": "3b566081163a556f7e949a24d6c9ff7154ab9181e129adf62e0cc1da46714cd9",
+            "TEST-com.floci.test.RdsIamTokenCompatTest.xml": "985aaf347eabc6d0e769c72d6c01ecb8c3d3bf5f9537a42b2b942de134c9db70",
+            "TEST-com.floci.test.RdsInstanceSnapshotIamTest.xml": "867f6f93b16341598ef1fb1b75267a6730066dbc8c535ecb624f2bfe604b1641",
+            "TEST-com.floci.test.RdsJdbcCompatTest.xml": "12a5d7fd1e161cb9b05f44aa64c2cb6ebb3a739f817d30af791065b0efa92f5b",
+            "TEST-com.floci.test.RdsMemberCredentialsTest.xml": "ec4086a848eea92c7a92e904d5a425b31d847b3cc81ccefb858d0f7f1795b280",
+            "TEST-com.floci.test.RdsStorageTypeTest.xml": "699d7ceceba76a20087e52424e359d78bbc4f1d05112b73b7a43647c32adba9a",
+            "TEST-com.floci.test.RdsSubnetOwnershipTest.xml": "4db393da24d4065328b3638164a39a8f7f64f20b9643f0836813032f73354be7"
+          }
+        }
+      },
+      "checkstyle": "passed"
+    },
+    "main": {
+      "pull_request": 636,
+      "images": {
+        "docker": "sha256:a286cfa36e63c039a265ec3fcfe378835a9bce7a64c45405c4cee43a01491231",
+        "kiri": "sha256:a286cfa36e63c039a265ec3fcfe378835a9bce7a64c45405c4cee43a01491231",
+        "source": "5de86ec2406ee8f45f658dd5dc49528751465caf"
+      },
+      "focused_tests": 83,
+      "focused_report_hashes": {
+        "TEST-io.github.hectorvent.floci.services.rds.container.PostgresIamReadinessTest.xml": "f6c76664ce4704c25f961f36df9a70c014bec02df2d2312f957a6a17861d33e2",
+        "TEST-io.github.hectorvent.floci.services.rds.container.RdsContainerManagerTest.xml": "7678d9f34f73de84b4c8bbccd76e782f2b090fe6d7e700e1e736e61f463503d0",
+        "TEST-io.github.hectorvent.floci.core.common.docker.ContainerExecTest.xml": "f1ceefea3f335517db6dca7bbfb31bd5ef4464b936d5cc2e74724eb6a678edc2"
+      },
+      "sdk": {
+        "docker": {
+          "tests": 45,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "reports": {
+            "TEST-com.floci.test.RdsAutoscalingMinimumTest.xml": "fb2e8ed16a2159066a820c5f674c4cf51fda4f5e6600b292e409de8effa9f626",
+            "TEST-com.floci.test.RdsAwsAdvancedJdbcWrapperTest.xml": "28f6257a28028041306ae2a46615a19c3db2df14d9f3f8a705c3e8009e90dbde",
+            "TEST-com.floci.test.RdsClusterIamStateTest.xml": "fb3d1ec9eea03debe8d4966d252c1200e88c663c8dc06df13dd83c1a343ba45e",
+            "TEST-com.floci.test.RdsClusterMemberIamStateTest.xml": "6c893c6b35e3e4175a30e70ef21b2f35b21517884961875307383e6c6bbe209e",
+            "TEST-com.floci.test.RdsClusterRestoreIamTest.xml": "239cb76d04668e00163221f1d0c6657dd2103b1abcd92caf2bcf817e0e6f584c",
+            "TEST-com.floci.test.RdsIamTokenCompatTest.xml": "02f1b07803baf80c901881b58ba326cba5cf364bec53eebc5359e473e699cd62",
+            "TEST-com.floci.test.RdsInstanceSnapshotIamTest.xml": "7a1373809065720ad5c1c08b266a76a9da250469a7101b46a88c4c8c803de1bf",
+            "TEST-com.floci.test.RdsJdbcCompatTest.xml": "02cd3286d0492f844e390bf3fb1c4a508c77022ce1bf026881165b41c20c7262",
+            "TEST-com.floci.test.RdsMemberCredentialsTest.xml": "010084f79c57da97a039a9ceda2d6226cac44493da688672f15d50eb6b459aab",
+            "TEST-com.floci.test.RdsStorageTypeTest.xml": "6f03b29813286d5e917000795b469379833182c9ae0c59a977bd4e4ebb7efd11",
+            "TEST-com.floci.test.RdsSubnetOwnershipTest.xml": "71929ef3654b23c51232915664850c010873f868877e97fb7004114044373d15"
+          }
+        },
+        "kiri": {
+          "tests": 45,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0,
+          "reports": {
+            "TEST-com.floci.test.RdsAutoscalingMinimumTest.xml": "664d444fe4a84ed6f99e734a943057cbf4db532fc31997f0a447a0135fd2486a",
+            "TEST-com.floci.test.RdsAwsAdvancedJdbcWrapperTest.xml": "187efe7a00a6900bbcabc18ef9bcf518c79f310ff5e0bb70d6a71ac1e783795b",
+            "TEST-com.floci.test.RdsClusterIamStateTest.xml": "b1b64e58df86f0d1a9ee6a226ef77e20dd7b80d9ab141aecd615812f8d21f777",
+            "TEST-com.floci.test.RdsClusterMemberIamStateTest.xml": "c7dde81d97eb4f002f7b99b282b4695a5a977be1a1578a61194c7fe5477f8a9c",
+            "TEST-com.floci.test.RdsClusterRestoreIamTest.xml": "501ff237ddb8683cce2edc94f8a6feb19576d468cfb83020242c62bcd59ab4ea",
+            "TEST-com.floci.test.RdsIamTokenCompatTest.xml": "af20e70e7c556edca6736bad27792045e7d19a9853d283b3800f436a81b6c677",
+            "TEST-com.floci.test.RdsInstanceSnapshotIamTest.xml": "d21bcb9d5b843fa8cdf0450659841d4f74a6587b4b00281e5f4984f6894ca615",
+            "TEST-com.floci.test.RdsJdbcCompatTest.xml": "431a10811ff47e124f7e05584386eb2d37b95d8f544f0d1524dde3f93b91ea24",
+            "TEST-com.floci.test.RdsMemberCredentialsTest.xml": "b6d1ec3658c6f92d0fa2ffb24adcbf600d3672e7931a07a2b09200c04c66ee7e",
+            "TEST-com.floci.test.RdsStorageTypeTest.xml": "9bbee567c68ab7c4d08a0b45992b8b9cf2b2b3ebd7505274705d78bd4e68d868",
+            "TEST-com.floci.test.RdsSubnetOwnershipTest.xml": "d30259f6fc394173f6ce05e788b83b8f898936099e77199d945a3a8e2b61be81"
+          }
+        }
+      },
+      "checkstyle": "passed"
+    }
+  },
+  "sdk_source_parity": [
+    {
+      "name": "RdsAutoscalingMinimumTest.java",
+      "dev_sha256": "cec7fe5a5ee1c34e6fc6a97dcf3ad015274061b3a204da9b2d946796171a3cb4",
+      "main_sha256": "cec7fe5a5ee1c34e6fc6a97dcf3ad015274061b3a204da9b2d946796171a3cb4",
+      "identical": true
+    },
+    {
+      "name": "RdsAwsAdvancedJdbcWrapperTest.java",
+      "dev_sha256": "a1f4dde117edf77f10e22c4f6ebc1329f7c98686f6054b4f531032213eae11f4",
+      "main_sha256": "a1f4dde117edf77f10e22c4f6ebc1329f7c98686f6054b4f531032213eae11f4",
+      "identical": true
+    },
+    {
+      "name": "RdsClusterIamStateTest.java",
+      "dev_sha256": "3ac7dfadf90c08afe18c615d5b37d54343cea7e6c7cdd43c69e9519bf9cc32bd",
+      "main_sha256": "3ac7dfadf90c08afe18c615d5b37d54343cea7e6c7cdd43c69e9519bf9cc32bd",
+      "identical": true
+    },
+    {
+      "name": "RdsClusterMemberIamStateTest.java",
+      "dev_sha256": "1538925e19b2ba8b391b800dce97ac9da18ac5715accee434e6f6106bfdf8be5",
+      "main_sha256": "1538925e19b2ba8b391b800dce97ac9da18ac5715accee434e6f6106bfdf8be5",
+      "identical": true
+    },
+    {
+      "name": "RdsClusterRestoreIamTest.java",
+      "dev_sha256": "19822d7ad1ea02c0ad2eccdc762be8c801bccc6eb7de43530e1d7238a09edf2b",
+      "main_sha256": "19822d7ad1ea02c0ad2eccdc762be8c801bccc6eb7de43530e1d7238a09edf2b",
+      "identical": true
+    },
+    {
+      "name": "RdsControlPlaneTest.java",
+      "dev_sha256": "01918c5dd65ba0c10f17b1acf05c85355f17a3f2cb048b0b37d85ddb7b9838d7",
+      "main_sha256": "25a61ad9041ac330e10a30f978f9528f744eabd9d94f79124a30eb5a9db09576",
+      "identical": false
+    },
+    {
+      "name": "RdsIamTokenCompatTest.java",
+      "dev_sha256": "9806862b18a3be8cc6a8444a32de173f3de2fa79c5ce0e68f9c798b3ee4c47a0",
+      "main_sha256": "9806862b18a3be8cc6a8444a32de173f3de2fa79c5ce0e68f9c798b3ee4c47a0",
+      "identical": true
+    },
+    {
+      "name": "RdsInstanceSnapshotIamTest.java",
+      "dev_sha256": "66e3b283bdcc79eb1a2f902d1d830b36c667cc1e579e4096c69e0f3656135aa4",
+      "main_sha256": "66e3b283bdcc79eb1a2f902d1d830b36c667cc1e579e4096c69e0f3656135aa4",
+      "identical": true
+    },
+    {
+      "name": "RdsJdbcCompatTest.java",
+      "dev_sha256": "581d8367ad565d95381c83ed2d6fedc5476d4fc429f1becc0d29495337c088ff",
+      "main_sha256": "581d8367ad565d95381c83ed2d6fedc5476d4fc429f1becc0d29495337c088ff",
+      "identical": true
+    },
+    {
+      "name": "RdsMemberCredentialsTest.java",
+      "dev_sha256": "a1983352adf0bdfab1a2fb4ab66d46f392d22eb85c3d1ce0f73d9e921775fc1d",
+      "main_sha256": "a1983352adf0bdfab1a2fb4ab66d46f392d22eb85c3d1ce0f73d9e921775fc1d",
+      "identical": true
+    },
+    {
+      "name": "RdsStorageTypeTest.java",
+      "dev_sha256": "424f0b23989be17c159951dcd7a2952330158977ea93a046a53935cb9e001c80",
+      "main_sha256": "424f0b23989be17c159951dcd7a2952330158977ea93a046a53935cb9e001c80",
+      "identical": true
+    },
+    {
+      "name": "RdsSubnetOwnershipTest.java",
+      "dev_sha256": "af7deeaf75f26381aea5dfbc6c1f70e93d52ccec4bfb8166e0e76136166e2f09",
+      "main_sha256": "af7deeaf75f26381aea5dfbc6c1f70e93d52ccec4bfb8166e0e76136166e2f09",
+      "identical": true
+    }
+  ]
+}
