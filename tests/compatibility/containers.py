@@ -337,6 +337,7 @@ class Engine:
             assert b"attach-history" in response, response
         finally:
             sock.close()
+
         cid = self.create(["cat"], OpenStdin=True, Tty=True)
         self.request("POST", f"/containers/{cid}/start", status=204)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -352,6 +353,51 @@ class Engine:
         finally:
             sock.close()
         assert self.inspect(cid)["State"]["Running"], "detach stopped the process"
+
+    def attach_before_start(self):
+        for upgrade in (False, True):
+            cid = self.create(["sh", "-c", "printf first-output; printf first-error >&2"])
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(3)
+            try:
+                sock.connect(self.path)
+                headers = "Connection: Upgrade\r\nUpgrade: tcp\r\n" if upgrade else "Connection: close\r\n"
+                path = f"/v1.48/containers/{cid}/attach?logs=0&stream=1&stdout=1&stderr=1"
+                sock.sendall((f"POST {path} HTTP/1.1\r\nHost: localhost\r\n{headers}Content-Length: 0\r\n\r\n").encode())
+                reader = sock.makefile("rb")
+                status = reader.readline()
+                assert int(status.split()[1]) == (101 if upgrade else 200), status
+                while True:
+                    line = reader.readline()
+                    assert line, "attach closed before response headers"
+                    if line == b"\r\n":
+                        break
+                self.request("POST", f"/containers/{cid}/start", status=204)
+                output = reader.read()
+                assert b"first-output" in output and b"first-error" in output, output
+                reader.close()
+            finally:
+                sock.close()
+
+    def container_detection(self):
+        for readonly in (False, True):
+            cid = self.create(["sh", "-c", "test -f /.dockerenv && test -r /.dockerenv"],
+                              host={"ReadonlyRootfs": readonly}, User="424242:424242")
+            self.request("POST", f"/containers/{cid}/start", status=204)
+            result = self.request("POST", f"/containers/{cid}/wait")
+            assert result["StatusCode"] == 0, result
+
+    def exec_without_upgrade(self):
+        cid = self.create()
+        self.request("POST", f"/containers/{cid}/start", status=204)
+        eid = self.request("POST", f"/containers/{cid}/exec", {
+            "Cmd": ["sh", "-c", "printf exec-out; printf exec-err >&2"],
+            "AttachStdout": True, "AttachStderr": True,
+        }, 201)["Id"]
+        output = self.request("POST", f"/exec/{eid}/start", {"Detach": False}, raw=True)
+        assert b"exec-out" in output and b"exec-err" in output, output
+        state = self.request("GET", f"/exec/{eid}/json")
+        assert not state["Running"] and state["ExitCode"] == 0, state
 
     def namespace_modes(self):
         cid = self.create(host={"NetworkMode": "none", "PidMode": "host", "IpcMode": "host", "UTSMode": "host", "CgroupnsMode": "host", "UsernsMode": "host"})
@@ -482,6 +528,9 @@ def main():
             ("advanced-resource-controls", engine.advanced_resources),
             ("endpoint-metadata", engine.endpoint_metadata),
             ("http-attach-controls", engine.http_attach_controls),
+            ("attach-before-start", engine.attach_before_start),
+            ("container-detection", engine.container_detection),
+            ("exec-without-upgrade", engine.exec_without_upgrade),
             ("namespace-modes", engine.namespace_modes),
             ("custom-seccomp", engine.custom_seccomp),
             ("bridge-options", engine.bridge_options),

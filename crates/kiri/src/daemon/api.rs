@@ -2264,7 +2264,10 @@ fn attach(req: &Request, engine: &Arc<Engine>, key: &str, w: &mut UnixStream, r:
         }
     } else { Output::Empty };
     let stopped = Arc::new(AtomicBool::new(false));
-    http::upgrade(w)?;
+    // SDKs such as docker-java attach without requesting an HTTP upgrade.
+    // Sending them 101 leaves their HTTP client waiting for a final response,
+    // deadlocking clients that wait for attachment before starting the process.
+    http::raw_stream(req, w)?;
     if want_in && req.flag("stream") {
         let close = engine.with(&id, |c| c.spec.stdin_once && !c.spec.tty).unwrap_or(false);
         forward_stdin(engine.clone(), id, r, close, tty.then_some(keys), Some(stopped.clone()))?;
@@ -2416,7 +2419,7 @@ fn exec_start(req: &Request, engine: &Arc<Engine>, id: &str, w: &mut UnixStream,
         http::respond(w, 200, "application/vnd.docker.raw-stream", b"")?;
         return Ok(Next::KeepAlive);
     }
-    http::upgrade(w)?;
+    http::raw_stream(req, w)?;
     if stdin {
         forward_stdin(engine.clone(), id.to_owned(), r, true, None, None)?;
     }

@@ -28,6 +28,18 @@ from a matching API version.
 
 ## Changes
 
+- Root-run Linux daemons default to `/run/kiri/docker.sock`, mode `0660`,
+  with the `docker` group when present (otherwise the socket's existing
+  group). Container users can connect through supplementary group membership
+  without a host account. `KIRI_SOCKET` still overrides the path.
+  Explicit `KIRI_SOCKET_GROUP` retains Kiri's managed account-membership
+  policy; the packaged desktop service selects that policy. For container
+  workloads using the standalone daemon, leave that override unset.
+- Create `/.dockerenv` before applying a read-only root filesystem so
+  applications can detect that they are running inside a container.
+- Attach and exec without HTTP upgrade return a streaming `200` response,
+  allowing SDKs to subscribe before starting a container. Clients requesting
+  an upgrade still receive `101`.
 - Recognize and validate API versions, returning JSON errors for unsupported
   versions instead of silently treating them as supported.
 - Decode escaped paths while preserving literal `+` characters.
@@ -52,7 +64,18 @@ cargo test --locked -p kiri -p kiri-image -p kiri-proto
 python3 tests/compatibility/inventory.py
 cargo xtask linux
 bash tests/compatibility/linux.sh
+bash tests/compatibility/socket-access.sh
 ```
+
+For a real Floci workload, run `bash tests/compatibility/floci.sh`. It uses a
+pinned Floci dev image, builds a small boto3 client, and checks actual Lambda
+handler results on Docker and Kiri. Image downloads and one warmup function
+are outside the measurements. It records ten fresh-function lifecycles and
+200 warm invocations per engine, running the engines sequentially. Reports
+go to `target/floci-benchmark`. `FLOCI_CPUSET=0,1` can constrain both engines to
+the same CPUs; keep other workloads off those CPUs when comparing timings.
+The pinned image is a JVM build, so these are not native-Floci timings.
+See [Floci interoperability and measured timings](floci.md) for the local results.
 
 The Linux harness starts two disposable privileged containers: Docker 28.0.4
 and the fork's native Linux engine, plus an unprivileged packet observer. Each has its own image/container state and

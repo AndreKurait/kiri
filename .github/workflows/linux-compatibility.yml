@@ -36,10 +36,21 @@ jobs:
         env:
           KIRI_BIN_DIR: ${{ github.workspace }}/target/linux-x86_64/release
         run: bash tests/compatibility/linux.sh
+      - name: Check default Linux socket access
+        env:
+          KIRI_BIN_DIR: ${{ github.workspace }}/target/linux-x86_64/release
+        run: bash tests/compatibility/socket-access.sh
+      - name: Exercise Floci Lambda on both engines
+        env:
+          KIRI_BIN_DIR: ${{ github.workspace }}/target/linux-x86_64/release
+          FLOCI_SAMPLES: "2"
+        run: bash tests/compatibility/floci.sh
       - name: Preserve conformance and benchmark reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: linux-compatibility
-          path: target/compatibility
+          path: |
+            target/compatibility
+            target/floci-benchmark
           if-no-files-found: ignore
