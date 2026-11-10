@@ -1,0 +1,232 @@
+{
+  "date_utc": "2026-11-10",
+  "platform": "Linux ARM64 Docker Desktop VM on Apple M3 Pro; legacy Flink 1.18 client and runtime used installed AMD64 emulation",
+  "floci_dev_source": "e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39",
+  "floci_main_clock_source": "3b4e622142874f68bf7e10ee0c8f07cd7f44019a",
+  "docker_version": "28.0.4",
+  "kiri_binary_sha256": {
+    "kiri": "2d4b22a1e64e804e557352f350a05616629a832edec5ab39396c1f2c12d217ed",
+    "kiri-init": "3eacd6a58f403483cd87b43c595ca4e19fa9539f988f0ba88b2b95a79f85f863"
+  },
+  "main_image_ids": {
+    "docker": "sha256:d909813174b70364c68b4e37875b03b3909392f1e9f4cb61c9a012430e793055",
+    "kiri": "sha256:d909813174b70364c68b4e37875b03b3909392f1e9f4cb61c9a012430e793055"
+  },
+  "results": {
+    "docker": {
+      "python": {
+        "distinct_cases_with_passing_evidence": 905,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "python",
+          "optin"
+        ],
+        "report_count": 2,
+        "report_manifest_sha256": "7102e69dab12fee36a7eafc5637be18070a203dee3069133de01e54d0afba3c2"
+      },
+      "go": {
+        "distinct_cases_with_passing_evidence": 216,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "go"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "d6ee6bc6c2a6c8a84cbbc36319c594ac4545565090851d1592dd5a02ff3bfc20"
+      },
+      "node": {
+        "distinct_cases_with_passing_evidence": 505,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "node-retry"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "7885e8daa9d07c1ef29840d25c578b078e833ebc9bb2436d94035681519e5f80"
+      },
+      "awscli": {
+        "distinct_cases_with_passing_evidence": 324,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "awscli",
+          "awscli-neptune-retry"
+        ],
+        "report_count": 2,
+        "report_manifest_sha256": "c7fd54276b2883eec2d450dc235dc25ba800b500e7d3ed06555cf8d7c5f7be7a"
+      },
+      "terraform": {
+        "distinct_cases_with_passing_evidence": 124,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "terraform-retry"
+        ],
+        "report_count": 15,
+        "report_manifest_sha256": "3ed252f693d803901c976ca4984044c9107f2e8430764ba0cd6c0d88bd773e45"
+      },
+      "opentofu": {
+        "distinct_cases_with_passing_evidence": 49,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "opentofu"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "827d53f3642d1c52979d9efcfb3411a6b058dc3b8fbafebc57e770dc2e627b01"
+      },
+      "cdk": {
+        "distinct_cases_with_passing_evidence": 26,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "cdk"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "4a870dc5976e4f178c459d2bedcb432cb29e3553063f37b7c997a944b31f57df"
+      },
+      "python_iam": {
+        "distinct_cases_with_passing_evidence": 52,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "iam"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "5c6c3dfa4fee82935efe76235d422762f7d96a072ceebf45168d8850334c21e3"
+      },
+      "main_appconfig": {
+        "distinct_cases_with_passing_evidence": 20,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "clock-main"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "14d393c4666a54a3fa82e46df66374d4a78377b6f0b0fc2a96b65803ef4f7981"
+      },
+      "main_api_gateway": {
+        "distinct_cases_with_passing_evidence": 4,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "apigateway-main"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "f07dc83eb1e3e43d9682e9c5e1de98db99a06cf0046906e3fefacfcbdfd383d3"
+      },
+      "java": {
+        "baseline_cases_with_passing_evidence": 3033,
+        "baseline_cases": 3033,
+        "uncovered_cases": 0,
+        "flink118_cases_run_under_amd64_emulation": 6
+      }
+    },
+    "kiri": {
+      "python": {
+        "distinct_cases_with_passing_evidence": 905,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "python",
+          "optin"
+        ],
+        "report_count": 2,
+        "report_manifest_sha256": "cf2b187496d052afb470e95c8b222d1d82152a07845beca429e4391d24ede9e8"
+      },
+      "go": {
+        "distinct_cases_with_passing_evidence": 216,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "go"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "e578cb25ea9950bc2647d3e0b23f834a81a4b4e9a120eb8ecd1e0676c4b045cf"
+      },
+      "node": {
+        "distinct_cases_with_passing_evidence": 505,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "node-retry"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "743ef2eac13b41569474b9d03984a0d953a87e0c478e626eacfa570bfdd1c8a6"
+      },
+      "awscli": {
+        "distinct_cases_with_passing_evidence": 324,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "awscli",
+          "awscli-neptune-retry"
+        ],
+        "report_count": 2,
+        "report_manifest_sha256": "209601abfcf7e91ab24d3ed10d5b8b2eb767d8797388350d801db0ae32c635b9"
+      },
+      "terraform": {
+        "distinct_cases_with_passing_evidence": 124,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "terraform-retry"
+        ],
+        "report_count": 15,
+        "report_manifest_sha256": "2c6e1a3b4df6853f0b124fbe14121e794294ed81455c796f3c4184a648c69b3f"
+      },
+      "opentofu": {
+        "distinct_cases_with_passing_evidence": 49,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "opentofu"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "91c541c474826d941831b91b637c6cccf3f3467d012db78163e64c6942800065"
+      },
+      "cdk": {
+        "distinct_cases_with_passing_evidence": 26,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "cdk"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "30aa661705e1fc711c4cd52082017bb3aafd90c34a87df2c82c470cd29c069ae"
+      },
+      "python_iam": {
+        "distinct_cases_with_passing_evidence": 52,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "iam"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "cc739af48bb1b13edba34bae23c39447444e4c7cc72c0d64df3908c8181ff0db"
+      },
+      "main_appconfig": {
+        "distinct_cases_with_passing_evidence": 20,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "clock-main"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "a42f225a89a48acbb4d64bad7c62c8daf2a2dfd073e86630b63e1a2611ae2583"
+      },
+      "main_api_gateway": {
+        "distinct_cases_with_passing_evidence": 4,
+        "uncovered_cases": 0,
+        "source_suites": [
+          "apigateway-main"
+        ],
+        "report_count": 1,
+        "report_manifest_sha256": "ca5b614d03e3ccbea87a2a44a08be160cd2e9ff8032932fe99bf1e3baacc2fd8"
+      },
+      "java": {
+        "baseline_cases_with_passing_evidence": 3033,
+        "baseline_cases": 3033,
+        "uncovered_cases": 0,
+        "flink118_cases_run_under_amd64_emulation": 6
+      }
+    }
+  },
+  "appconfig_dev_normal_profile": {
+    "source": "cc041372f5b82a3b485bc85c2334bc89009a2d4f",
+    "passed_tests": 395,
+    "classes": 33,
+    "ci_run": 42762403786
+  },
+  "main_focused_tests_passed": 76,
+  "limitations": [
+    "Counts combine baseline and successful follow-up runs; original failures remain in local artifacts.",
+    "Different suites overlap in behavior; their counts are not a count of distinct AWS operations.",
+    "Terraform Docker wrapper exited 2 after all fifteen Bats files exited 0; its summary was independently reconstructed from file exits and JUnit. Kiri wrapper exited 0.",
+    "Full AppConfig dev CI rerun remains red for one CodeDeploy agent image preparation setup timeout; relevant AppConfig tests passed.",
+    "These packaged JVM Floci tests do not prove full Docker API parity or native-Floci performance.",
+    "Fresh service performance measurements require separate uncontended benchmark runs."
+  ]
+}

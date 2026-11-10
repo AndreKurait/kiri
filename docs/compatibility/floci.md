@@ -85,6 +85,8 @@ The merged dev JVM image at `e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39`
 was also exercised on both Linux ARM64 engines. The following counts combine
 the baseline suites with focused follow-up runs, deduplicating test cases.
 They are compatibility evidence, not controlled performance measurements.
+The [validation summary](floci-validation-2026-11-10.json) records revisions,
+binary hashes, case counts, report-manifest hashes, and remaining limitations.
 
 | Suite | Passing cases on Docker | Passing cases on Kiri |
 | --- | ---: | ---: |
