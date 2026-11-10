@@ -41,3 +41,40 @@ Docker and 65.6 ms for Kiri; warm-invocation p95 was 7.74 ms and 8.78 ms.
 [Raw measurements and binary hashes](floci-lambda-2026-11-10.json) retain every
 sample. Reproduce with `bash tests/compatibility/floci.sh`; use
 `FLOCI_CPUSET=0,1` to constrain both engines to the same CPUs.
+
+## Floci shutdown fix and follow-up measurement
+
+The roughly one-second delete time above came primarily from Floci's Lambda
+shutdown behavior. Its Python runtime ran as PID 1 without an init process,
+so SIGTERM did not terminate it promptly. Floci now requests an init process
+and preserves a bounded drain for external extension shutdown callbacks and
+their final logs. The isolated fix was merged into AndreKurait/floci main
+through PR #628 and dev through PR #629.
+
+A follow-up comparison used 20 fresh functions per engine, each with one
+first invocation and 20 warm invocations, followed by deletion. Both engines
+used CPUs 0 and 1 sequentially, identical packaged JVM Floci images and cached
+Python 3.12 images, with one warmup function excluded and no concurrent Maven
+build. The workload has no external Lambda extensions.
+
+| Median elapsed time, with Floci fix | Docker 28.0.4 | Kiri |
+| --- | ---: | ---: |
+| Create function through first result | 104.8 ms | 61.3 ms |
+| Warm invocation | 3.86 ms | 4.31 ms |
+| Delete function | 66.2 ms | 8.7 ms |
+| Create, 21 invocations, delete | 260.2 ms | 157.0 ms |
+
+Kiri completed this lifecycle about 1.66 times faster than Docker. First-result
+latency was about 1.71 times faster and deletion about 7.59 times faster.
+Warm invocations were about 11% slower on Kiri in this run.
+
+The larger improvement was the Floci fix: Kiri's median lifecycle dropped from
+1,148.5 ms to 157.0 ms, about 7.32 times faster. Docker improved from 1,294.8 ms
+to 260.2 ms, about 4.98 times faster. These are separate effects; the Floci
+improvement should not be attributed to changing container runtimes.
+
+[Paired before/after measurements](floci-lambda-shutdown-2026-11-10.json)
+include the source revisions, image IDs, and samples. The optimized source
+tree is identical to merged dev revision
+`e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39`. These measurements cover a small
+local Lambda workload, not all Floci services or a native Floci build.
