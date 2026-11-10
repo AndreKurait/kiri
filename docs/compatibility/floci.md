@@ -94,13 +94,21 @@ They are compatibility evidence, not controlled performance measurements.
 | AWS CLI, including Neptune retry | 324 | 324 |
 | Java SDK baseline cases covered by passing runs | 3,027 / 3,033 | 3,027 / 3,033 |
 | OpenTofu | 49 | 49 |
+| Terraform | 124 | 124 |
 | CDK | 26 | 26 |
 | Python IAM enforcement | 52 | 52 |
 
 Six Java cases in the Flink 1.18 class remain unverified in this matrix:
 the class disables itself on ARM64 because its runtime image is AMD64-only.
-Terraform validation is still in progress and is not included as a completed
-suite. Passing these suites does not establish full Docker API parity.
+Passing these suites does not establish full Docker API parity.
+
+Terraform's first run overloaded this shared machine with 15 concurrent Bats
+files per engine and timed out. A retry limited each engine to two files at a
+time. All 15 files exited successfully and all 124 JUnit cases passed on each
+engine. Docker's reporting wrapper then failed while printing its summary,
+after a mounted-script edit during execution; its exit code 2 is retained.
+Independent aggregation verified all per-file exit codes and JUnit results.
+Kiri's wrapper completed normally with exit code 0.
 
 Kiri's archive upload path needed an additional compatibility fix. Docker
 clients can send plain or gzip-compressed tar archives to containers, including
