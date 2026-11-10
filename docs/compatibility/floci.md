@@ -82,7 +82,8 @@ local Lambda workload, not all Floci services or a native Floci build.
 ### Dedicated Linux benchmark
 
 The existing Linux compatibility workflow has an opt-in `benchmark` input.
-It builds the validated Floci revision above, finishes all compilation before
+It builds pinned Floci revision `aa044a5aca52805b6e7c02f0c27d7e02f83a896a`
+with the PostgreSQL readiness fix, finishes all compilation before
 measurement, and runs Docker and Kiri sequentially on CPUs 0 and 1 in disposable
 engines. Each engine measures 20 Lambda functions with 20 warm invocations each,
 plus ten Redis and ten PostgreSQL lifecycles. One warmup per workload is excluded.
@@ -90,9 +91,9 @@ The service probes verify Redis PING/SET/GET and a PostgreSQL table, insert, and
 query before deleting the resources.
 
 Run `gh workflow run linux-compatibility.yml --ref <branch> -f benchmark=true`
-on a branch containing this workflow version. The optional `floci_ref` input
-selects another Floci commit for a follow-up; the resolved commit is recorded
-in `floci-source.txt`. The `floci-runtime-benchmark`
+on a branch containing this workflow version. To measure another revision,
+update the pinned checkout commit in the workflow after validating that source.
+The resolved commit is recorded in `floci-source.txt`. The `floci-runtime-benchmark`
 artifact contains raw samples, image identities, binary hashes, CPU affinity,
 and daemon/application logs. Normal compatibility CI keeps its short Lambda
 smoke test. Inspect artifact completeness and matching image IDs before

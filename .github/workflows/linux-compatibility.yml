@@ -9,10 +9,6 @@ on:
         description: Run the pinned Floci Lambda, Redis, and PostgreSQL benchmark
         type: boolean
         default: false
-      floci_ref:
-        description: Floci commit or ref to benchmark
-        type: string
-        default: e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39
 permissions:
   contents: read
 concurrency:
@@ -76,7 +72,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: AndreKurait/floci
-          ref: ${{ inputs.floci_ref }}
+          ref: aa044a5aca52805b6e7c02f0c27d7e02f83a896a
           path: target/floci-source
           persist-credentials: false
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
