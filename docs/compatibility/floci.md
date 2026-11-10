@@ -78,3 +78,48 @@ include the source revisions, image IDs, and samples. The optimized source
 tree is identical to merged dev revision
 `e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39`. These measurements cover a small
 local Lambda workload, not all Floci services or a native Floci build.
+
+## Broader compatibility validation
+
+The merged dev JVM image at `e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39`
+was also exercised on both Linux ARM64 engines. The following counts combine
+the baseline suites with focused follow-up runs, deduplicating test cases.
+They are compatibility evidence, not controlled performance measurements.
+
+| Suite | Passing cases on Docker | Passing cases on Kiri |
+| --- | ---: | ---: |
+| Python SDK, including opt-in configurations | 905 | 905 |
+| Go SDK | 216 | 216 |
+| Node SDK | 505 | 505 |
+| AWS CLI, including Neptune retry | 324 | 324 |
+| Java SDK baseline cases covered by passing runs | 3,027 / 3,033 | 3,027 / 3,033 |
+| OpenTofu | 49 | 49 |
+| CDK | 26 | 26 |
+| Python IAM enforcement | 52 | 52 |
+
+Six Java cases in the Flink 1.18 class remain unverified in this matrix:
+the class disables itself on ARM64 because its runtime image is AMD64-only.
+Terraform validation is still in progress and is not included as a completed
+suite. Passing these suites does not establish full Docker API parity.
+
+Kiri's archive upload path needed an additional compatibility fix. Docker
+clients can send plain or gzip-compressed tar archives to containers, including
+with chunked HTTP transfer encoding. Kiri now detects gzip after decoding the
+agent's copy framing, streams decompression, and preserves permission bits.
+Regression checks cover plain and compressed uploads to stopped and running
+containers with fixed-length and chunked requests. All 57 native Linux agent
+tests and the 20 affected Java follow-up cases passed.
+
+Other follow-up failures came from the validation setup or test assertions:
+callback tests needed a reachable published port; IAM policy tests and strict
+signature tests needed their documented, separate server configurations; and
+API Gateway tests needed to assert the unwrapped HTTP response and use a signed
+JWT with a real discovery/JWKS fixture. The latter fixture change is proposed
+separately in AndreKurait/floci PRs #631 (dev) and #632 (main).
+
+Parallel functional-suite elapsed times should not be interpreted as engine
+speedups. They include provider polling, application startup, image preparation,
+and shared-machine contention. For example, the RDS Terraform run waited about
+60 seconds before its first instance-status query, then polled at approximately
+10-second intervals. Such waits can dominate an otherwise fast container
+lifecycle.
