@@ -125,7 +125,7 @@ fn copy_in(conn: &mut fs::File, spec: &CopySpec<'_>) -> io::Result<()> {
         Err(_) => return Err(io::Error::new(io::ErrorKind::NotFound, format!("notfound: Could not find the file {} in container {}", spec.path, spec.id))),
     }
     let source: Box<dyn Read + '_> = if spec.flags & copy_flags::CHUNKED != 0 { Box::new(Chunks::new(&mut *conn)) } else { Box::new(&mut *conn) };
-    let mut reader = BufReader::with_capacity(256 * 1024, source);
+    let mut reader = archive_reader(source)?;
     {
         let mut archive = tar::Archive::new(&mut reader);
         archive.set_preserve_permissions(true);
@@ -155,6 +155,21 @@ fn copy_in(conn: &mut fs::File, spec: &CopySpec<'_>) -> io::Result<()> {
     let mut out = Vec::new();
     Msg::CopyDone.encode(&mut out);
     conn.write_all(&out)
+}
+
+/// Docker clients can send gzip-compressed tar bodies without a
+/// Content-Encoding header. Sniff the stream after removing copy framing.
+fn archive_reader<'a>(source: impl Read + 'a) -> io::Result<Box<dyn Read + 'a>> {
+    let mut buffered = BufReader::with_capacity(256 * 1024, source);
+    let mut prefix = Vec::with_capacity(3);
+    buffered.by_ref().take(3).read_to_end(&mut prefix)?;
+    let gzip = prefix.starts_with(&[0x1f, 0x8b, 0x08]);
+    let reader = io::Cursor::new(prefix).chain(buffered);
+    if gzip {
+        Ok(Box::new(flate2::read::MultiGzDecoder::new(reader)))
+    } else {
+        Ok(Box::new(reader))
+    }
 }
 
 /// A `copy_flags::CHUNKED` archive: chunks of `len: u32 LE | bytes`, read
@@ -256,12 +271,14 @@ fn append_one(b: &mut tar::Builder<impl Write>, src: &std::path::Path, name: &st
     if ft.is_file() {
         let mut h = tar::Header::new_gnu();
         h.set_metadata(meta);
+        h.set_mode(meta.mode() & 0o7777);
         let mut f = fs::File::open(src)?;
         return b.append_data(&mut h, name, &mut f);
     }
     if ft.is_dir() || ft.is_symlink() || ft.is_fifo() || ft.is_char_device() || ft.is_block_device() {
         let mut h = tar::Header::new_gnu();
         h.set_metadata(meta);
+        h.set_mode(meta.mode() & 0o7777);
         h.set_size(0);
         if ft.is_symlink() {
             return b.append_link(&mut h, name, fs::read_link(src)?);
@@ -435,6 +452,24 @@ fn read_frame(conn: &mut impl Read, buf: &mut Vec<u8>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn copied_tar_mode_contains_permissions_without_file_type_bits() {
+        let path = std::env::temp_dir().join(format!("kiri-copy-mode-{}", std::process::id()));
+        fs::create_dir(&path).unwrap();
+        let file = path.join("snapshot.sql");
+        fs::write(&file, b"SELECT 1;").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o640)).unwrap();
+        let mut builder = tar::Builder::new(Vec::new());
+        append_one(&mut builder, &file, std::path::Path::new("snapshot.sql"), &fs::metadata(&file).unwrap()).unwrap();
+        let bytes = builder.into_inner().unwrap();
+        fs::remove_dir_all(path).unwrap();
+        let mut archive = tar::Archive::new(&bytes[..]);
+        let entry = archive.entries().unwrap().next().unwrap().unwrap();
+        assert_eq!(entry.header().mode().unwrap(), 0o640);
+        assert!(entry.header().entry_type().is_file());
+    }
 
     #[test]
     fn chunks_end_at_the_empty_chunk_and_leave_the_rest() {
@@ -451,5 +486,55 @@ mod tests {
         let wire = [&5u32.to_le_bytes()[..], b"ab"].concat();
         let err = Chunks::new(&wire[..]).read_to_end(&mut Vec::new()).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn plain_and_gzip_archives_survive_fragmented_copy_frames() {
+        let mut tar = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(9);
+        header.set_mode(0o640);
+        tar.append_data(&mut header, "snapshot.sql", &b"SELECT 1;"[..]).unwrap();
+        let plain = tar.into_inner().unwrap();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&plain).unwrap();
+        for bytes in [plain, encoder.finish().unwrap()] {
+            // Split even the magic bytes across frames.
+            let mut wire = Vec::new();
+            for byte in bytes {
+                wire.extend_from_slice(&1u32.to_le_bytes());
+                wire.push(byte);
+            }
+            wire.extend_from_slice(&0u32.to_le_bytes());
+            wire.extend_from_slice(b"next-request");
+            let mut conn = &wire[..];
+            {
+                let mut reader = archive_reader(Chunks::new(&mut conn)).unwrap();
+                {
+                    let mut tar = tar::Archive::new(&mut reader);
+                    let mut entries = tar.entries().unwrap();
+                    let mut entry = entries.next().unwrap().unwrap();
+                    assert_eq!(entry.path().unwrap().as_ref(), std::path::Path::new("snapshot.sql"));
+                    assert_eq!(entry.header().mode().unwrap(), 0o640);
+                    let mut sql = String::new();
+                    entry.read_to_string(&mut sql).unwrap();
+                    assert_eq!(sql, "SELECT 1;");
+                    assert!(entries.next().is_none());
+                }
+                io::copy(&mut reader, &mut io::sink()).unwrap();
+            }
+            assert_eq!(conn, b"next-request");
+        }
+    }
+
+    #[test]
+    fn gzip_archive_checks_its_trailer() {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&[0; 1024]).unwrap();
+        let mut compressed = encoder.finish().unwrap();
+        let crc = compressed.len() - 8;
+        compressed[crc] ^= 1;
+        let mut reader = archive_reader(&compressed[..]).unwrap();
+        assert!(io::copy(&mut reader, &mut io::sink()).is_err());
     }
 }
