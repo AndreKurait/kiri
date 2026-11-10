@@ -50,6 +50,11 @@ for engine in reference kiri; do
   docker exec -e "KIRI_TEST_PEER=$PEER" "$RUN-$engine" python3 /src/tests/compatibility/containers.py \
     --socket "/sockets/$engine.sock" --output "/reports/$engine.json" \
     --benchmark "${KIRI_BENCH_SAMPLES:-50}" || status=1
+  echo "Attach/exec HTTP checks: $engine"
+  docker exec "$RUN-$engine" python3 /src/tests/attach-http.py \
+    "/sockets/$engine.sock" alpine:3.21 \
+    >"$REPORTS/$engine-attach.log" 2>&1 || status=1
+  tail -5 "$REPORTS/$engine-attach.log"
   echo "IPv6 checks: $engine"
   docker exec -e DOCKER_HOST="unix:///sockets/$engine.sock" -e V6C_CLIENT=1 \
     "$RUN-$engine" bash /src/tests/ipv6-conformance.sh \
