@@ -81,6 +81,8 @@ t version-api "1.47" $D version --format '{{.Server.APIVersion}}'
 t info-os "Kiri" $D info --format '{{.OperatingSystem}}'
 t info-cgroup "2" $D info --format '{{.CgroupVersion}}'
 
+code attach-http-negotiation 0 python3 "$(dirname "$0")/attach-http.py" "$SOCK"
+
 section "images"
 t pull-alpine "alpine:latest" $D pull alpine:latest
 t pull-busybox "busybox" $D pull busybox
