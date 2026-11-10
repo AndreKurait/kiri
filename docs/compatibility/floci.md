@@ -153,6 +153,39 @@ These functional runs are not controlled performance measurements.
 record the exact sources, images, case counts, and test source parity. The
 baseline timings above do not include this readiness fix.
 
+The follow-up Linux AMD64 benchmark `42773788430` passed using the exact dev
+fix revision and Kiri revision `127e7221d824c291c9c14adc2f7fbcd86f210454`.
+All workload image IDs matched between engines; CPU allocation and all expected
+samples passed the same artifact checks as the baseline.
+
+| Median elapsed time, with PostgreSQL readiness fix | Docker 28.0.4 | Kiri | Docker / Kiri |
+| --- | ---: | ---: | ---: |
+| Lambda create through first result | 200.9 ms | 80.7 ms | 2.49 |
+| Lambda warm invocation | 7.24 ms | 6.14 ms | 1.18 |
+| Lambda delete | 94.4 ms | 15.4 ms | 6.12 |
+| Lambda create, 21 invocations, delete | 448.2 ms | 235.0 ms | 1.91 |
+| Redis create through verified operation | 240.0 ms | 125.7 ms | 1.91 |
+| Redis delete | 179.7 ms | 17.3 ms | 10.41 |
+| Redis complete lifecycle | 419.3 ms | 142.7 ms | 2.94 |
+| PostgreSQL create through verified query | 1,772.0 ms | 1,517.8 ms | 1.17 |
+| PostgreSQL delete | 204.9 ms | 43.2 ms | 4.75 |
+| PostgreSQL complete lifecycle | 1,981.3 ms | 1,561.7 ms | 1.27 |
+
+In this run, Kiri reduced complete lifecycle time by 48% for Lambda, 66% for
+Redis, and 21% for PostgreSQL. Warm invocation results changed direction from
+the previous run; the PostgreSQL-only fix does not explain that difference,
+and these small runs do not establish a consistent warm-invocation advantage.
+
+Using PostgreSQL's embedded final-server ready timestamp, median time until
+Floci logged the instance as created was 109.5 ms for Docker and 55 ms for Kiri.
+The earlier run measured 514.5 ms and 956 ms respectively. This supports the
+readiness-polling diagnosis, but separate CI runs use different machines and
+are not a controlled before/after measure of the fix's overall speedup.
+
+[Follow-up samples, identities, and readiness gaps](floci-linux-amd64-postgres-readiness-2026-11-10.json)
+retain the complete evidence. Results remain scoped to these cached-image
+workloads and the JVM Floci build, not every service or a native Floci build.
+
 ## Broader compatibility validation
 
 The merged dev JVM image at `e477e8e5dd50f9a6402c8fcc5bd01e9426b12f39`
