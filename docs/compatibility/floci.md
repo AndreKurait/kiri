@@ -92,15 +92,18 @@ They are compatibility evidence, not controlled performance measurements.
 | Go SDK | 216 | 216 |
 | Node SDK | 505 | 505 |
 | AWS CLI, including Neptune retry | 324 | 324 |
-| Java SDK baseline cases covered by passing runs | 3,027 / 3,033 | 3,027 / 3,033 |
+| Java SDK baseline cases covered by passing runs | 3,033 / 3,033 | 3,033 / 3,033 |
 | OpenTofu | 49 | 49 |
 | Terraform | 124 | 124 |
 | CDK | 26 | 26 |
 | Python IAM enforcement | 52 | 52 |
 
-Six Java cases in the Flink 1.18 class remain unverified in this matrix:
-the class disables itself on ARM64 because its runtime image is AMD64-only.
-Passing these suites does not establish full Docker API parity.
+The six Flink 1.18 cases normally disable themselves on an ARM64 JVM because
+their runtime image is AMD64-only. A follow-up run used a real AMD64 Java 17
+client and the AMD64 Flink image under the host's installed emulation, with
+Floci still running on ARM64. All six unchanged cases passed with zero skips
+on both engines. This covers functionality under emulation, not native AMD64
+performance. Passing these suites does not establish full Docker API parity.
 
 Terraform's first run overloaded this shared machine with 15 concurrent Bats
 files per engine and timed out. A retry limited each engine to two files at a
