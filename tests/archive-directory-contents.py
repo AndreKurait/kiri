@@ -49,7 +49,7 @@ def check(path, image):
             " && ln -s /etc {0}/link && ln -s {2} {0}/longlink".format(DIRECTORY, LONG_NAME, LONG_TARGET))
         for state in ("running", "stopped"):
             if state == "stopped":
-                run("stop", "--time", "0", cid)
+                run("stop", "-t", "0", cid)
                 run("wait", cid)
             # Docker resolves ".." by name before it archives a path, so the
             # parent of "link" is this directory, not the root "link" points
