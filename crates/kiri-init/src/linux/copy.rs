@@ -200,7 +200,7 @@ fn copy_out(conn: &mut fs::File, spec: &CopySpec<'_>) -> io::Result<()> {
     // stats it as given.
     let cleaned;
     let source = if spec.op == copy_op::OUT && !spec.path.is_empty() {
-        cleaned = clean(spec.path);
+        cleaned = archived(spec.path);
         cleaned.as_str()
     } else {
         spec.path
@@ -242,6 +242,16 @@ fn copy_out(conn: &mut fs::File, spec: &CopySpec<'_>) -> io::Result<()> {
 /// and the root is "/".
 fn base(path: &str) -> &str {
     path.trim_end_matches('/').rsplit('/').next().filter(|name| !name.is_empty()).unwrap_or("/")
+}
+
+/// The path an archive is read from: `path` with its dots resolved by name.
+/// Where that names nothing, `path` as given, so that every path found
+/// before is still found: the window follows a start script's relative
+/// link by asking for the link's directory, "..", and the rest, and behind
+/// a linked directory (/bin on many images) only the kernel finds that.
+fn archived(path: &str) -> String {
+    let cleaned = clean(path);
+    if fs::symlink_metadata(&cleaned).is_ok() { cleaned } else { path.to_owned() }
 }
 
 /// `path` from the root, with "." and ".." resolved by name. A final "." (a
@@ -568,6 +578,28 @@ mod tests {
         for (path, name) in [("/t/dir/sub/..", ".."), ("/t/dir/sub/../", ".."), ("/t/dir/.", "."), ("/t/dir/", "dir"), ("/", "/"), ("//", "/")] {
             assert_eq!(base(path), name, "{path}");
         }
+    }
+
+    #[test]
+    fn a_path_only_the_kernel_finds_is_archived_as_given() {
+        let dir = std::env::temp_dir().join(format!("kiri-archived-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("usr/bin")).unwrap();
+        fs::create_dir_all(dir.join("usr/share")).unwrap();
+        fs::create_dir_all(dir.join("share")).unwrap();
+        fs::write(dir.join("usr/share/start.sh"), "").unwrap();
+        fs::write(dir.join("usr/share/both"), "").unwrap();
+        fs::write(dir.join("share/both"), "").unwrap();
+        std::os::unix::fs::symlink("usr/bin", dir.join("bin")).unwrap();
+        let at = |rest: &str| format!("{}/{rest}", dir.display());
+        // By name this is share/start.sh, which is not there: the kernel's stays.
+        assert_eq!(archived(&at("bin/../share/start.sh")), at("bin/../share/start.sh"));
+        // Where the path by name is there, it is the one, as in Docker.
+        assert_eq!(archived(&at("bin/../share/both")), at("share/both"));
+        assert_eq!(archived(&at("usr/bin/..")), at("usr"));
+        // Nothing either way: the path as given, for the error to name.
+        assert_eq!(archived(&at("bin/../none")), at("bin/../none"));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
